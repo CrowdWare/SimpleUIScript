@@ -290,17 +290,15 @@ fun test() {
      val code = """
         var a = 4
         var b = 2
-        var c = a * b
+        var c = a * b * 4 / 2
         var d = a / b
-       
-
         var flag = false
         var neg = -a
         var pos = +a
         var inv = !flag
         
-        showAlert("c=" + c + ", d=" + d)
-        showAlert("neg=" + neg + ", pos=" + pos + ", inv=" + inv)
+        showAlert("c = " + c + ", d = " + d)
+        showAlert("neg = " + neg + ", pos = " + pos + ", inv = " + inv)
 
         if (c == 8 && d == 2) {
             showAlert("Multiplikation und Division funktionieren!")
@@ -310,7 +308,6 @@ fun test() {
             showAlert("Unary operations work!")
         }
      
-  
         var count = 0
         while (count < 5) {
             showAlert("Count = " + count)
