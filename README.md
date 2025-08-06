@@ -1,12 +1,69 @@
-This is a Kotlin Multiplatform project targeting Desktop (JVM).
+# Simple UI Script
 
-* [/composeApp](./composeApp/src) is for code that will be shared across your Compose Multiplatform applications.
-  It contains several subfolders:
-    - [commonMain](./composeApp/src/commonMain/kotlin) is for code that’s common for all targets.
-    - Other folders are for Kotlin code that will be compiled for only the platform indicated in the folder name.
-      For example, if you want to use Apple’s CoreCrypto for the iOS part of your Kotlin app,
-      the [iosMain](./composeApp/src/iosMain/kotlin) folder would be the right place for such calls.
-      Similarly, if you want to edit the Desktop (JVM) specific part, the [jvmMain](./composeApp/src/jvmMain/kotlin)
-      folder is the appropriate location.
+A small, extendable interpreter for a minimalist scripting language implemented in Kotlin using the [better-parse](https://github.com/h0tk3y/better-parse) library.
 
-Learn more about [Kotlin Multiplatform](https://www.jetbrains.com/help/kotlin-multiplatform-dev/get-started.html)…
+## Features
+
+- **Variables**: `var name = expression`
+- **Data Types**: Integer, String, Boolean
+- **Expressions**:
+  - **Arithmetic**: `+`, `-`, `*`, `/`
+  - **Comparison**: `==`, `!=`, `<`, `>`, `<=`, `>=`
+  - **Logical**: `&&`, `||`, unary `!`, unary `+`, unary `-`
+- **Control Flow**:
+  - `if (condition) { ... } else { ... }`
+  - `while (condition) { ... }`
+- **Function Calls**: built-in `submit()` and `showAlert(message)` for side effects
+- **AST-based**: clear separation between parsing and evaluation
+
+## Getting Started
+
+### Prerequisites
+
+- JDK 8+ or later
+- Gradle or Maven
+
+### Build
+
+Using Gradle:
+
+```bash
+./gradlew build
+```
+
+Using Maven:
+
+```bash
+mvn clean package
+```
+
+### Run Examples
+
+You can run it from your IDE or via a main launcher, for example:
+
+```bash
+# If you have an application plugin set up in Gradle:
+./gradlew run
+```
+
+## Extending the Interpreter
+
+This minimal interpreter can be extended with:
+
+- **Loops**: `for`, `do-while`
+- **Functions**: user-defined functions, parameters, `return`
+- **Scope Management**: local vs. global variables
+- **Data Structures**: Lists, Maps, Arrays
+- **Error Handling**: richer error messages, exception handling (`throw`/`catch`)
+- **Standard Library**: `print()`, `toString()`, math utilities
+
+To add new grammar rules, update `Parser.kt` and extend `Interpreter.evaluateExpression` or `executeStatement` accordingly.
+
+## Contributing
+
+Feel free to open issues or submit pull requests to add features or fix bugs. Please follow the existing code style and add tests for new functionality.
+
+## License
+
+This project is released under the GPL3 License.
+
