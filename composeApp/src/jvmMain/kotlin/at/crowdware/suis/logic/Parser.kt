@@ -285,10 +285,10 @@ fun test() {
         }
      
   
-        var count = 3
-        while (count > 0) {
+        var count = 0
+        while (count < 5) {
             showAlert("Count = " + count)
-            count = count - 1
+            count = count + 1
         }
     """.trimIndent()
 
