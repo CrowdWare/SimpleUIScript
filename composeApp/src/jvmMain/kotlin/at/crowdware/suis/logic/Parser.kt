@@ -24,6 +24,11 @@ data class VarDeclaration(val name: String, val value: Expression) : Statement()
 data class Assignment(val name: String, val value: Expression) : Statement()
 data class ExpressionStatement(val expression: Expression) : Statement()
 
+data class WhileStatement(
+    val condition: Expression,
+    val body: List<Statement>
+) : Statement()
+
 // Expressions
 sealed class Expression : ASTNode()
 data class UnaryExpression(val operator: String, val expr: Expression) : Expression()
@@ -40,6 +45,7 @@ object MiniLanguageGrammar : Grammar<List<Statement>>() {
     val VAR by literalToken("var")
     val IF by literalToken("if")
     val ELSE by literalToken("else")
+    val WHILE by literalToken("while")
     val TRUE by literalToken("true")
     val FALSE by literalToken("false")
     val EQUALS by literalToken("==")
@@ -62,6 +68,9 @@ object MiniLanguageGrammar : Grammar<List<Statement>>() {
     val RPAREN by literalToken(")")
     val COMMA by literalToken(",")
 
+    // Zeilenkommentar ignorieren
+    val LINE_COMMENT by regexToken("//.*", ignore = true)
+
     val STRING by regexToken("\"[^\"]*\"")
     val NUMBER by regexToken("\\d+")
     val IDENTIFIER by regexToken("[a-zA-Z_][a-zA-Z0-9_]*")
@@ -69,7 +78,6 @@ object MiniLanguageGrammar : Grammar<List<Statement>>() {
 
     // Parser Declarations
     val expression: Parser<Expression> by parser { logicalExpression }
-    val statement: Parser<Statement> by parser { varDeclaration or assignment or ifStatement or expressionStatement }
 
     // Basic Parsers
     val identifier by IDENTIFIER use { Identifier(text) }
@@ -113,7 +121,9 @@ object MiniLanguageGrammar : Grammar<List<Statement>>() {
     val varDeclaration by (-VAR and IDENTIFIER and -ASSIGN and expression) use { VarDeclaration(t1.text, t2) }
     val assignment by (IDENTIFIER and -ASSIGN and expression) use { Assignment(t1.text, t2) }
     val expressionStatement by expression use { ExpressionStatement(this) }
-    val blockStatements by separatedTerms(statement, WS, acceptZero = true)
+    val blockStatements: Parser<List<Statement>> by parser {
+        separatedTerms(statement, WS, acceptZero = true)
+    }
     val elseClause by (-ELSE and -LBRACE and blockStatements and -RBRACE)
     val ifWithParens by (
             -IF and -LPAREN and expression and -RPAREN and
@@ -133,7 +143,18 @@ object MiniLanguageGrammar : Grammar<List<Statement>>() {
         val elseBranch = t3
         IfStatement(condition, thenBranch, elseBranch)
     }
-    val ifStatement: Parser<Statement> by (ifWithParens or ifWithoutParens)
+    val ifStatement: Parser<Statement> by parser {
+        ifWithParens or ifWithoutParens
+    }
+    val whileStatement: Parser<Statement> by parser {
+        -WHILE and -LPAREN and expression and -RPAREN and
+        -LBRACE and blockStatements and -RBRACE
+    }.map { (cond, body) ->
+        WhileStatement(cond, body)
+    }
+    val statement: Parser<Statement> by parser {
+        varDeclaration or assignment or ifStatement or whileStatement or expressionStatement
+    }
     override val rootParser by separatedTerms(statement, WS, acceptZero = true)
 }
 
@@ -167,6 +188,11 @@ class Interpreter {
                     statement.thenBranch.forEach { executeStatement(it) }
                 } else {
                     statement.elseBranch?.forEach { executeStatement(it) }
+                }
+            }
+            is WhileStatement -> {
+                while ((evaluateExpression(statement.condition) as Boolean)) {
+                    statement.body.forEach { executeStatement(it) }
                 }
             }
             is ExpressionStatement -> {
@@ -256,6 +282,13 @@ fun test() {
 
         if (!flag && neg < 0) {
             showAlert("Unary operations work!")
+        }
+     
+  
+        var count = 3
+        while (count > 0) {
+            showAlert("Count = " + count)
+            count = count - 1
         }
     """.trimIndent()
 
