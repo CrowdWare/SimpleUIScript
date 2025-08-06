@@ -37,7 +37,14 @@ data class FunctionCall(val name: String, val arguments: List<Expression>) : Exp
 data class StringLiteral(val value: String) : Expression()
 data class NumberLiteral(val value: Int) : Expression()
 data class BooleanLiteral(val value: Boolean) : Expression()
+
 data class Identifier(val name: String) : Expression()
+
+// Neu: Postfix-Inkrement
+data class PostfixExpression(
+    val expr: Expression,
+    val operator: String
+) : Expression()
 
 // Grammar Definition
 object MiniLanguageGrammar : Grammar<List<Statement>>() {
@@ -55,6 +62,8 @@ object MiniLanguageGrammar : Grammar<List<Statement>>() {
     val LT by literalToken("<")
     val GT by literalToken(">")
     val ASSIGN by literalToken("=")
+    // Postfix-Inkrement
+    val PP by literalToken("++")
     val PLUS by literalToken("+")
     val MINUS by literalToken("-")
     val MULT by literalToken("*")
@@ -91,12 +100,19 @@ object MiniLanguageGrammar : Grammar<List<Statement>>() {
             functionCall or stringLiteral or numberLiteral or booleanLiteral or identifier or parenthesizedExpression
             )
 
+    // Postfix-Inkrement-Parser
+    val postfixExpression: Parser<Expression> by parser {
+        primaryExpression and optional(PP)
+    }.map { (expr, op) ->
+        if (op != null) PostfixExpression(expr, op.text) else expr
+    }
+
     // Operator Precedence
     // Unäre Operatoren mit map
     val unaryExpression: Parser<Expression> by parser {
         ((NOT or PLUS or MINUS) and unaryExpression).map { (token, expr) ->
             UnaryExpression(token.text, expr)
-        } or primaryExpression
+        } or postfixExpression
     }
     val multiplicativeExpression by leftAssociative(unaryExpression, MULT or DIV) { l, op, r ->
         BinaryExpression(l, op.text, r)
@@ -203,6 +219,15 @@ class Interpreter {
 
     private fun evaluateExpression(expression: Expression): Any? {
         return when (expression) {
+            // Handle postfix increment
+            is PostfixExpression -> {
+                val id = expression.expr as? Identifier
+                    ?: error("'++' only on identifiers")
+                val old = (variables[id.name] as? Int)
+                    ?: error("Cannot ++ non-int variable")
+                variables[id.name] = old + 1
+                old
+            }
             is UnaryExpression -> {
                 val v = evaluateExpression(expression.expr)
                 when (expression.operator) {
@@ -262,17 +287,18 @@ class Interpreter {
 }
 
 fun test() {
-    val code = """
+     val code = """
         var a = 4
         var b = 2
         var c = a * b
         var d = a / b
+       
 
         var flag = false
         var neg = -a
         var pos = +a
         var inv = !flag
-
+        
         showAlert("c=" + c + ", d=" + d)
         showAlert("neg=" + neg + ", pos=" + pos + ", inv=" + inv)
 
@@ -288,7 +314,7 @@ fun test() {
         var count = 0
         while (count < 5) {
             showAlert("Count = " + count)
-            count = count + 1
+            count++
         }
     """.trimIndent()
 
