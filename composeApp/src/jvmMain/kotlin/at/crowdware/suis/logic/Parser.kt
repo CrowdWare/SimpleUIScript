@@ -56,7 +56,21 @@ data class PostfixExpression(
 
 // Grammar Definition
 object MiniLanguageGrammar : Grammar<List<Statement>>() {
-    // Tokens
+    // WICHTIG: Whitespace und Kommentare zuerst definieren
+    val WS by regexToken("\\s+", ignore = true)
+    val LINE_COMMENT by regexToken("//[^\\r\\n]*", ignore = true)
+
+    // Multi-character operators first (längere Tokens haben Vorrang)
+    val EQUALS by literalToken("==")
+    val NOT_EQUALS by literalToken("!=")
+    val LE by literalToken("<=")
+    val GE by literalToken(">=")
+    val PP by literalToken("++")
+    val MM by literalToken("--")  // Postfix-Dekrement hinzugefügt
+    val AND by literalToken("&&")
+    val OR by literalToken("||")
+
+    // Keywords
     val VAR by literalToken("var")
     val IF by literalToken("if")
     val ELSE by literalToken("else")
@@ -64,21 +78,15 @@ object MiniLanguageGrammar : Grammar<List<Statement>>() {
     val FOR by literalToken("for")
     val TRUE by literalToken("true")
     val FALSE by literalToken("false")
-    val EQUALS by literalToken("==")
-    val NOT_EQUALS by literalToken("!=")
-    val LE by literalToken("<=")
-    val GE by literalToken(">=")
+
+    // Single character tokens
     val LT by literalToken("<")
     val GT by literalToken(">")
     val ASSIGN by literalToken("=")
-    // Postfix-Inkrement
-    val PP by literalToken("++")
     val PLUS by literalToken("+")
     val MINUS by literalToken("-")
     val MULT by literalToken("*")
     val DIV by literalToken("/")
-    val AND by literalToken("&&")
-    val OR by literalToken("||")
     val NOT by literalToken("!")
     val LBRACE by literalToken("{")
     val RBRACE by literalToken("}")
@@ -87,13 +95,10 @@ object MiniLanguageGrammar : Grammar<List<Statement>>() {
     val COMMA by literalToken(",")
     val SEMICOLON by literalToken(";")
 
-    // Zeilenkommentar ignorieren
-    val LINE_COMMENT by regexToken("//.*", ignore = true)
-
+    // Regex tokens
     val STRING by regexToken("\"[^\"]*\"")
     val NUMBER by regexToken("\\d+")
     val IDENTIFIER by regexToken("[a-zA-Z_][a-zA-Z0-9_]*")
-    val WS by regexToken("\\s+", ignore = true)
 
     // Parser Declarations
     val expression: Parser<Expression> by parser { logicalExpression }
@@ -110,9 +115,9 @@ object MiniLanguageGrammar : Grammar<List<Statement>>() {
             functionCall or stringLiteral or numberLiteral or booleanLiteral or identifier or parenthesizedExpression
             )
 
-    // Postfix-Inkrement-Parser
+    // Postfix-Inkrement/Dekrement-Parser
     val postfixExpression: Parser<Expression> by parser {
-        primaryExpression and optional(PP)
+        primaryExpression and optional(PP or MM)
     }.map { (expr, op) ->
         if (op != null) PostfixExpression(expr, op.text) else expr
     }
@@ -261,14 +266,23 @@ class Interpreter {
 
     private fun evaluateExpression(expression: Expression): Any? {
         return when (expression) {
-            // Handle postfix increment
+            // Handle postfix increment/decrement
             is PostfixExpression -> {
                 val id = expression.expr as? Identifier
-                    ?: error("'++' only on identifiers")
+                    ?: error("'++/--' only on identifiers")
                 val old = (variables[id.name] as? Int)
-                    ?: error("Cannot ++ non-int variable")
-                variables[id.name] = old + 1
-                old
+                    ?: error("Cannot ++/-- non-int variable")
+                when (expression.operator) {
+                    "++" -> {
+                        variables[id.name] = old + 1
+                        old
+                    }
+                    "--" -> {
+                        variables[id.name] = old - 1
+                        old
+                    }
+                    else -> error("Unknown postfix operator: ${expression.operator}")
+                }
             }
             is UnaryExpression -> {
                 val v = evaluateExpression(expression.expr)
@@ -356,24 +370,30 @@ fun test() {
             count++
         }
         
-     
+        // Neue for-Schleife Tests
         showAlert("Testing for-loop:")
         for (var i = 0; i < 5; i++) {
             showAlert("For loop i = " + i)
         }
         
-      
+        // for-Schleife mit externen Variablen
         showAlert("For loop with external variables:")
         var j = 10
         for (; j > 5; j = j - 1) {
             showAlert("For loop j = " + j)
         }
         
-      
+        // for-Schleife ohne Initialisierung
         showAlert("For loop starting from existing variable:")
-        
-        for (var k = 0; k <= 2; k++) {
+        var k = 0
+        for (; k <= 2; k++) {
             showAlert("For loop k = " + k)
+        }
+        
+        // for-Schleife mit Dekrement
+        showAlert("For loop with decrement:")
+        for (var m = 5; m > 0; m--) {
+            showAlert("For loop m = " + m)
         }
     """.trimIndent()
 
