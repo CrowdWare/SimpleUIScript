@@ -41,9 +41,20 @@ data class ForStatement(
 data class BreakStatement(val dummy: Unit = Unit) : Statement()
 data class ContinueStatement(val dummy: Unit = Unit) : Statement()
 
+// Return Statement
+data class ReturnStatement(val value: Expression?) : Statement()
+
+// Function Definition
+data class FunctionDeclaration(
+    val name: String,
+    val parameters: List<String>,
+    val body: List<Statement>
+) : Statement()
+
 // Exception-Klassen für Kontrollfluss
 class BreakException : Exception()
 class ContinueException : Exception()
+class ReturnException(val value: Any?) : Exception()
 
 // Expressions
 sealed class Expression : ASTNode()
@@ -67,6 +78,8 @@ object MiniLanguageGrammar : Grammar<List<Statement>>() {
     // WICHTIG: Whitespace und Kommentare zuerst definieren
     val WS by regexToken("\\s+", ignore = true)
     val LINE_COMMENT by regexToken("//[^\\r\\n]*", ignore = true)
+    // Neu: Blockkommentare /* */ - unterstützt auch mehrzeilige Kommentare
+    val BLOCK_COMMENT by regexToken("/\\*[\\s\\S]*?\\*/", ignore = true)
 
     // Multi-character operators first (längere Tokens haben Vorrang)
     val EQUALS by literalToken("==")
@@ -86,6 +99,8 @@ object MiniLanguageGrammar : Grammar<List<Statement>>() {
     val FOR by literalToken("for")
     val BREAK by literalToken("break")
     val CONTINUE by literalToken("continue")
+    val FUN by literalToken("fun")
+    val RETURN by literalToken("return")
     val TRUE by literalToken("true")
     val FALSE by literalToken("false")
 
@@ -209,9 +224,21 @@ object MiniLanguageGrammar : Grammar<List<Statement>>() {
     val breakStatement by BREAK use { BreakStatement() }
     val continueStatement by CONTINUE use { ContinueStatement() }
 
+    // Return Statement
+    val returnStatement by (RETURN and optional(expression)) use { ReturnStatement(t2) }
+
+    // Function Declaration
+    val parameterList by separatedTerms(IDENTIFIER, COMMA, acceptZero = true)
+    val functionDeclaration: Parser<Statement> by parser {
+        FUN and IDENTIFIER and LPAREN and parameterList and RPAREN and
+                LBRACE and blockStatements and RBRACE
+    }.map { (_, name, _, params, _, _, body, _) ->
+        FunctionDeclaration(name.text, params.map { it.text }, body)
+    }
+
     val statement: Parser<Statement> by parser {
-        varDeclaration or assignment or ifStatement or whileStatement or forStatement or
-                breakStatement or continueStatement or expressionStatement
+        functionDeclaration or varDeclaration or assignment or ifStatement or whileStatement or forStatement or
+                breakStatement or continueStatement or returnStatement or expressionStatement
     }
     override val rootParser by separatedTerms(statement, WS, acceptZero = true)
 }
@@ -219,12 +246,21 @@ object MiniLanguageGrammar : Grammar<List<Statement>>() {
 // Interpreter
 class Interpreter {
     private val variables = mutableMapOf<String, Any>()
+    private val functions = mutableMapOf<String, FunctionDeclaration>()
 
     init {
         variables["name"] = "Art"
     }
 
     fun interpret(statements: List<Statement>) {
+        // Erste Phase: Funktionsdeklarationen sammeln
+        statements.forEach { statement ->
+            if (statement is FunctionDeclaration) {
+                functions[statement.name] = statement
+            }
+        }
+
+        // Zweite Phase: Code ausführen
         statements.forEach { executeStatement(it) }
     }
 
@@ -295,6 +331,14 @@ class Interpreter {
             }
             is ContinueStatement -> {
                 throw ContinueException()
+            }
+            is ReturnStatement -> {
+                val value = statement.value?.let { evaluateExpression(it) }
+                throw ReturnException(value)
+            }
+            is FunctionDeclaration -> {
+                // Funktionsdeklarationen werden bereits in interpret() verarbeitet
+                // Hier nichts tun
             }
             is ExpressionStatement -> {
                 evaluateExpression(statement.expression)
@@ -369,7 +413,39 @@ class Interpreter {
         return when (name) {
             "submit"    -> { println("submit() wurde aufgerufen"); Unit }
             "showAlert" -> { println("Alert: ${args.firstOrNull() ?: "No message"}"); Unit }
-            else         -> error("Unknown function: $name")
+            else -> {
+                // Benutzerdefinierte Funktion
+                val function = functions[name] ?: error("Unknown function: $name")
+
+                // Parameter-Anzahl prüfen
+                if (args.size != function.parameters.size) {
+                    error("Function '$name' expects ${function.parameters.size} arguments, got ${args.size}")
+                }
+
+                // Neuen Scope für Funktionsausführung erstellen
+                val savedVariables = variables.toMap()
+
+                try {
+                    // Parameter als lokale Variablen setzen
+                    function.parameters.forEachIndexed { index, param ->
+                        variables[param] = args[index] ?: Unit
+                    }
+
+                    // Funktionskörper ausführen
+                    function.body.forEach { executeStatement(it) }
+
+                    // Standardrückgabe wenn kein explizites return
+                    null
+
+                } catch (e: ReturnException) {
+                    // Return-Statement gefangen
+                    e.value
+                } finally {
+                    // Originale Variablen wiederherstellen (außer globale)
+                    variables.clear()
+                    variables.putAll(savedVariables)
+                }
+            }
         }
     }
 
@@ -382,9 +458,65 @@ class Interpreter {
 
 fun test() {
     val code = """
+        /* Dies ist ein mehrzeiliger 
+           Blockkommentar der verschiedene 
+           Zeilen umfasst */
+           
+        /* Benutzerdefinierte Funktionen */
+        fun add(a, b) {
+            return a + b
+        }
+        
+        fun greet(name) {
+            showAlert("Hello, " + name + "!")
+            return "Greeting sent to " + name
+        }
+        
+        fun factorial(n) {
+            if (n <= 1) {
+                return 1
+            }
+            return n * factorial(n - 1)
+        }
+        
+        fun fibonacci(n) {
+            if (n <= 1) {
+                return n
+            }
+            return fibonacci(n - 1) + fibonacci(n - 2)
+        }
+        
+        fun countDown(n) {
+            while (n > 0) {
+                showAlert("Countdown: " + n)
+                n = n - 1
+                if (n == 3) {
+                    return "Early exit at " + n
+                }
+            }
+            return "Countdown finished"
+        }
+        
+        /* Teste benutzerdefinierte Funktionen */
+        var result1 = add(5, 3)
+        showAlert("add(5, 3) = " + result1)
+        
+        var result2 = greet("Alice")
+        showAlert("greet result: " + result2)
+        
+        var result3 = factorial(5)
+        showAlert("factorial(5) = " + result3)
+        
+        var result4 = fibonacci(6)
+        showAlert("fibonacci(6) = " + result4)
+        
+        var result5 = countDown(7)
+        showAlert("countDown result: " + result5)
+        
+        /* Ursprüngliche Tests */
         var a = 4
         var b = 2
-        var c = a * b * 4 / 2
+        /* Berechnung von c */ var c = a * b * 4 / 2
         var d = a / b
         var flag = false
         var neg = -a
@@ -394,6 +526,7 @@ fun test() {
         showAlert("c = " + c + ", d = " + d)
         showAlert("neg = " + neg + ", pos = " + pos + ", inv = " + inv)
 
+        /* Teste mathematische Operationen */
         if (c == 8 && d == 2) {
             showAlert("Multiplikation und Division funktionieren!")
         }
@@ -408,36 +541,42 @@ fun test() {
             count++
         }
         
-        // Neue for-Schleife Tests
+        /* 
+         * Neue for-Schleife Tests
+         * Diese können auch verschachtelte Kommentare enthalten
+         */
         showAlert("Testing for-loop:")
         for (var i = 0; i < 5; i++) {
             showAlert("For loop i = " + i)
         }
         
-        // for-Schleife mit externen Variablen
+        /* for-Schleife mit externen Variablen */
         showAlert("For loop with external variables:")
         var j = 10
         for (; j > 5; j = j - 1) {
             showAlert("For loop j = " + j)
         }
         
-        // for-Schleife ohne Initialisierung
+        /* for-Schleife ohne Initialisierung */
         showAlert("For loop starting from existing variable:")
         var k = 0
         for (; k <= 2; k++) {
             showAlert("For loop k = " + k)
         }
         
-        // for-Schleife mit Dekrement
+        /* for-Schleife mit Dekrement */
         showAlert("For loop with decrement:")
         for (var m = 5; m > 0; m--) {
             showAlert("For loop m = " + m)
         }
         
-        // Break und Continue Tests
+        /*
+         * Break und Continue Tests
+         * Diese testen die Kontrollfluss-Mechanismen
+         */
         showAlert("Testing break and continue:")
         
-        // Break Test
+        /* Break Test */
         showAlert("Break test - should stop at 3:")
         for (var n = 0; n < 10; n++) {
             if (n == 3) {
@@ -446,7 +585,7 @@ fun test() {
             showAlert("Break test n = " + n)
         }
         
-        // Continue Test
+        /* Continue Test */
         showAlert("Continue test - should skip even numbers:")
         for (var p = 0; p < 6; p++) {
             if (p == 2 || p == 4) {
@@ -455,7 +594,7 @@ fun test() {
             showAlert("Continue test p = " + p)
         }
         
-        // While mit break/continue
+        /* While mit break/continue */
         showAlert("While loop with break and continue:")
         var q = 0
         while (q < 10) {
@@ -468,6 +607,7 @@ fun test() {
             }
             showAlert("While q = " + q)
         }
+        /* Ende des Testcodes */
     """.trimIndent()
 
     try {
@@ -481,6 +621,11 @@ fun test() {
         interpreter.interpret(ast)
 
         println("\nVariablen nach Ausführung:")
+        println("result1 = ${interpreter.getVariable("result1")}")
+        println("result2 = ${interpreter.getVariable("result2")}")
+        println("result3 = ${interpreter.getVariable("result3")}")
+        println("result4 = ${interpreter.getVariable("result4")}")
+        println("result5 = ${interpreter.getVariable("result5")}")
         println("a = ${interpreter.getVariable("a")}")
         println("b = ${interpreter.getVariable("b")}")
         println("c = ${interpreter.getVariable("c")}")
@@ -507,7 +652,6 @@ fun test() {
 // TODO:
 // - Blöcke mit deren Scopes {}
 // - Benutzerdefinierte Funktionen
-// - Kommentare
 // - Fehlerbehandlung mit Zeilennummer, Spalte
 // - Compound Assignment Operatoren (+=, -=, *=, /=)
 // - Prefix Increment/Decrement (++i, --i)
