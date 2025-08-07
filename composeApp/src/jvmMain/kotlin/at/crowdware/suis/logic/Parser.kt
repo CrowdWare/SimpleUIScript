@@ -29,6 +29,14 @@ data class WhileStatement(
     val body: List<Statement>
 ) : Statement()
 
+// Neue for-Schleife
+data class ForStatement(
+    val init: Statement?,
+    val condition: Expression?,
+    val update: Statement?,
+    val body: List<Statement>
+) : Statement()
+
 // Expressions
 sealed class Expression : ASTNode()
 data class UnaryExpression(val operator: String, val expr: Expression) : Expression()
@@ -40,7 +48,7 @@ data class BooleanLiteral(val value: Boolean) : Expression()
 
 data class Identifier(val name: String) : Expression()
 
-// Neu: Postfix-Inkrement
+// Postfix-Inkrement
 data class PostfixExpression(
     val expr: Expression,
     val operator: String
@@ -53,6 +61,7 @@ object MiniLanguageGrammar : Grammar<List<Statement>>() {
     val IF by literalToken("if")
     val ELSE by literalToken("else")
     val WHILE by literalToken("while")
+    val FOR by literalToken("for")
     val TRUE by literalToken("true")
     val FALSE by literalToken("false")
     val EQUALS by literalToken("==")
@@ -76,6 +85,7 @@ object MiniLanguageGrammar : Grammar<List<Statement>>() {
     val LPAREN by literalToken("(")
     val RPAREN by literalToken(")")
     val COMMA by literalToken(",")
+    val SEMICOLON by literalToken(";")
 
     // Zeilenkommentar ignorieren
     val LINE_COMMENT by regexToken("//.*", ignore = true)
@@ -164,12 +174,24 @@ object MiniLanguageGrammar : Grammar<List<Statement>>() {
     }
     val whileStatement: Parser<Statement> by parser {
         -WHILE and -LPAREN and expression and -RPAREN and
-        -LBRACE and blockStatements and -RBRACE
+                -LBRACE and blockStatements and -RBRACE
     }.map { (cond, body) ->
         WhileStatement(cond, body)
     }
+
+    // For-Schleife Parser
+    val forStatement: Parser<Statement> by parser {
+        -FOR and -LPAREN and
+                optional(varDeclaration or assignment) and -SEMICOLON and
+                optional(expression) and -SEMICOLON and
+                optional(assignment or expressionStatement) and -RPAREN and
+                -LBRACE and blockStatements and -RBRACE
+    }.map { (init, condition, update, body) ->
+        ForStatement(init, condition, update, body)
+    }
+
     val statement: Parser<Statement> by parser {
-        varDeclaration or assignment or ifStatement or whileStatement or expressionStatement
+        varDeclaration or assignment or ifStatement or whileStatement or forStatement or expressionStatement
     }
     override val rootParser by separatedTerms(statement, WS, acceptZero = true)
 }
@@ -209,6 +231,26 @@ class Interpreter {
             is WhileStatement -> {
                 while ((evaluateExpression(statement.condition) as Boolean)) {
                     statement.body.forEach { executeStatement(it) }
+                }
+            }
+            // Neue for-Schleife Ausführung
+            is ForStatement -> {
+                // Initialisierung
+                statement.init?.let { executeStatement(it) }
+
+                // Schleife
+                while (true) {
+                    // Bedingung prüfen (wenn keine Bedingung vorhanden, endlos laufen)
+                    if (statement.condition != null) {
+                        val conditionResult = evaluateExpression(statement.condition)
+                        if (conditionResult != true) break
+                    }
+
+                    // Schleifenkörper ausführen
+                    statement.body.forEach { executeStatement(it) }
+
+                    // Update-Statement ausführen
+                    statement.update?.let { executeStatement(it) }
                 }
             }
             is ExpressionStatement -> {
@@ -287,7 +329,7 @@ class Interpreter {
 }
 
 fun test() {
-     val code = """
+    val code = """
         var a = 4
         var b = 2
         var c = a * b * 4 / 2
@@ -309,9 +351,29 @@ fun test() {
         }
      
         var count = 0
-        while (count < 5) {
-            showAlert("Count = " + count)
+        while (count < 3) {
+            showAlert("While Count = " + count)
             count++
+        }
+        
+     
+        showAlert("Testing for-loop:")
+        for (var i = 0; i < 5; i++) {
+            showAlert("For loop i = " + i)
+        }
+        
+      
+        showAlert("For loop with external variables:")
+        var j = 10
+        for (; j > 5; j = j - 1) {
+            showAlert("For loop j = " + j)
+        }
+        
+      
+        showAlert("For loop starting from existing variable:")
+        
+        for (var k = 0; k <= 2; k++) {
+            showAlert("For loop k = " + k)
         }
     """.trimIndent()
 
@@ -333,6 +395,10 @@ fun test() {
         println("neg = ${interpreter.getVariable("neg")}")
         println("pos = ${interpreter.getVariable("pos")}")
         println("inv = ${interpreter.getVariable("inv")}")
+        println("count = ${interpreter.getVariable("count")}")
+        println("i = ${interpreter.getVariable("i")}")
+        println("j = ${interpreter.getVariable("j")}")
+        println("k = ${interpreter.getVariable("k")}")
         println("name = ${interpreter.getVariable("name")}")
 
     } catch (e: Exception) {
@@ -341,7 +407,9 @@ fun test() {
     }
 }
 
-// es fehlen noch while und for Schleifen und Blöcke mit deren Scopes {}
-// Benutzerdefinierte Funktionen
-// Kommentare
-// Fehlerbehandlung mit Zeilennummer, Spalte
+// TODO:
+// - Blöcke mit deren Scopes {}
+// - Benutzerdefinierte Funktionen
+// - Kommentare
+// - Fehlerbehandlung mit Zeilennummer, Spalte
+// - break/continue für Schleifen
