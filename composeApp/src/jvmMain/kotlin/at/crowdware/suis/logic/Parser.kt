@@ -37,6 +37,14 @@ data class ForStatement(
     val body: List<Statement>
 ) : Statement()
 
+// Break und Continue Statements
+data class BreakStatement(val dummy: Unit = Unit) : Statement()
+data class ContinueStatement(val dummy: Unit = Unit) : Statement()
+
+// Exception-Klassen für Kontrollfluss
+class BreakException : Exception()
+class ContinueException : Exception()
+
 // Expressions
 sealed class Expression : ASTNode()
 data class UnaryExpression(val operator: String, val expr: Expression) : Expression()
@@ -76,6 +84,8 @@ object MiniLanguageGrammar : Grammar<List<Statement>>() {
     val ELSE by literalToken("else")
     val WHILE by literalToken("while")
     val FOR by literalToken("for")
+    val BREAK by literalToken("break")
+    val CONTINUE by literalToken("continue")
     val TRUE by literalToken("true")
     val FALSE by literalToken("false")
 
@@ -195,8 +205,13 @@ object MiniLanguageGrammar : Grammar<List<Statement>>() {
         ForStatement(init, condition, update, body)
     }
 
+    // Break und Continue Statements
+    val breakStatement by BREAK use { BreakStatement() }
+    val continueStatement by CONTINUE use { ContinueStatement() }
+
     val statement: Parser<Statement> by parser {
-        varDeclaration or assignment or ifStatement or whileStatement or forStatement or expressionStatement
+        varDeclaration or assignment or ifStatement or whileStatement or forStatement or
+                breakStatement or continueStatement or expressionStatement
     }
     override val rootParser by separatedTerms(statement, WS, acceptZero = true)
 }
@@ -234,29 +249,52 @@ class Interpreter {
                 }
             }
             is WhileStatement -> {
-                while ((evaluateExpression(statement.condition) as Boolean)) {
-                    statement.body.forEach { executeStatement(it) }
+                try {
+                    while ((evaluateExpression(statement.condition) as Boolean)) {
+                        try {
+                            statement.body.forEach { executeStatement(it) }
+                        } catch (e: ContinueException) {
+                            // Continue zur nächsten Iteration
+                            continue
+                        }
+                    }
+                } catch (e: BreakException) {
+                    // Break aus der Schleife
                 }
             }
             // Neue for-Schleife Ausführung
             is ForStatement -> {
-                // Initialisierung
-                statement.init?.let { executeStatement(it) }
+                try {
+                    // Initialisierung
+                    statement.init?.let { executeStatement(it) }
 
-                // Schleife
-                while (true) {
-                    // Bedingung prüfen (wenn keine Bedingung vorhanden, endlos laufen)
-                    if (statement.condition != null) {
-                        val conditionResult = evaluateExpression(statement.condition)
-                        if (conditionResult != true) break
+                    // Schleife
+                    while (true) {
+                        // Bedingung prüfen (wenn keine Bedingung vorhanden, endlos laufen)
+                        if (statement.condition != null) {
+                            val conditionResult = evaluateExpression(statement.condition)
+                            if (conditionResult != true) break
+                        }
+
+                        try {
+                            // Schleifenkörper ausführen
+                            statement.body.forEach { executeStatement(it) }
+                        } catch (e: ContinueException) {
+                            // Continue - springe zum Update und zur nächsten Iteration
+                        }
+
+                        // Update-Statement ausführen
+                        statement.update?.let { executeStatement(it) }
                     }
-
-                    // Schleifenkörper ausführen
-                    statement.body.forEach { executeStatement(it) }
-
-                    // Update-Statement ausführen
-                    statement.update?.let { executeStatement(it) }
+                } catch (e: BreakException) {
+                    // Break aus der Schleife
                 }
+            }
+            is BreakStatement -> {
+                throw BreakException()
+            }
+            is ContinueStatement -> {
+                throw ContinueException()
             }
             is ExpressionStatement -> {
                 evaluateExpression(statement.expression)
@@ -395,6 +433,41 @@ fun test() {
         for (var m = 5; m > 0; m--) {
             showAlert("For loop m = " + m)
         }
+        
+        // Break und Continue Tests
+        showAlert("Testing break and continue:")
+        
+        // Break Test
+        showAlert("Break test - should stop at 3:")
+        for (var n = 0; n < 10; n++) {
+            if (n == 3) {
+                break
+            }
+            showAlert("Break test n = " + n)
+        }
+        
+        // Continue Test
+        showAlert("Continue test - should skip even numbers:")
+        for (var p = 0; p < 6; p++) {
+            if (p == 2 || p == 4) {
+                continue
+            }
+            showAlert("Continue test p = " + p)
+        }
+        
+        // While mit break/continue
+        showAlert("While loop with break and continue:")
+        var q = 0
+        while (q < 10) {
+            q++
+            if (q == 3 || q == 7) {
+                continue
+            }
+            if (q == 8) {
+                break
+            }
+            showAlert("While q = " + q)
+        }
     """.trimIndent()
 
     try {
@@ -419,6 +492,10 @@ fun test() {
         println("i = ${interpreter.getVariable("i")}")
         println("j = ${interpreter.getVariable("j")}")
         println("k = ${interpreter.getVariable("k")}")
+        println("m = ${interpreter.getVariable("m")}")
+        println("n = ${interpreter.getVariable("n")}")
+        println("p = ${interpreter.getVariable("p")}")
+        println("q = ${interpreter.getVariable("q")}")
         println("name = ${interpreter.getVariable("name")}")
 
     } catch (e: Exception) {
@@ -432,4 +509,7 @@ fun test() {
 // - Benutzerdefinierte Funktionen
 // - Kommentare
 // - Fehlerbehandlung mit Zeilennummer, Spalte
-// - break/continue für Schleifen
+// - Compound Assignment Operatoren (+=, -=, *=, /=)
+// - Prefix Increment/Decrement (++i, --i)
+// - Modulo-Operator (%)
+// - Float/Double Unterstützung
