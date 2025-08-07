@@ -651,7 +651,6 @@ fun test() {
 
 // TODO:
 // - Blöcke mit deren Scopes {}
-// - Benutzerdefinierte Funktionen
 // - Fehlerbehandlung mit Zeilennummer, Spalte
 // - Compound Assignment Operatoren (+=, -=, *=, /=)
 // - Prefix Increment/Decrement (++i, --i)
