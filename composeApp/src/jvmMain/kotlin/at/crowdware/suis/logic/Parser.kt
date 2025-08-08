@@ -114,6 +114,8 @@ object MiniLanguageGrammar : Grammar<List<Statement>>() {
     val FALSE by literalToken("false")
     // CHG: data classes keyword
     val DATA by literalToken("data")
+    // CHG: Kotlin-style 'class' keyword for 'data class'
+    val CLASS by literalToken("class")
 
     // Single character tokens
     val LT by literalToken("<")
@@ -271,11 +273,10 @@ object MiniLanguageGrammar : Grammar<List<Statement>>() {
         FunctionDeclaration(t1.text, t2.map { it.text }, t3)
     }
 
-    // CHG: data class declaration: data Name(field1, field2)
+    // CHG: Kotlin-style syntax: 'data class Name(field1, field2)'
     val dataClassDeclaration: Parser<Statement> by (
-        -DATA and IDENTIFIER and -LPAREN and parameterList and -RPAREN
+        -DATA and -CLASS and IDENTIFIER and -LPAREN and parameterList and -RPAREN
     ) use {
-        // CHG: simplified tuple after skipping punctuation and 'data'
         DataClassDeclaration(t1.text, t2.map { it.text })
     }
 
@@ -683,7 +684,7 @@ fun test() {
             showAlert("While q = " + q)
         }
         /* Data class tests */
-        data Person(name, age)
+        data class Person(name, age) // CHG
         var user = Person("Alice", 30)
         showAlert("Person name = " + user.name)
         showAlert("Person age = " + user.age)
