@@ -471,11 +471,133 @@ class Interpreter {
                 val args = expression.arguments.map { evaluateExpression(it) }
                 executeFunction(expression.name, args)
             }
-            is StringLiteral  -> expression.value
+            is StringLiteral  -> {
+                // CHG: Kotlin-style string interpolation: "...${expr}..."
+                val s = expression.value
+                if (!s.contains("\${")) return s
+                val regex = Regex("\\$\\{([^}]*)}" )
+                var out = StringBuilder()
+                var lastIndex = 0
+                for (m in regex.findAll(s)) {
+                    out.append(s.substring(lastIndex, m.range.first))
+                    val inside = m.groupValues[1].trim()
+                    val value = evaluateTemplateExpr(inside) // CHG: removed selection artifacts
+                    out.append(value?.toString() ?: "null")
+                    lastIndex = m.range.last + 1
+                }
+                out.append(s.substring(lastIndex))
+                out.toString()
+            }
             is NumberLiteral  -> expression.value
             is BooleanLiteral -> expression.value
             is Identifier     -> variables[expression.name]
         }
+    }
+
+    // CHG: expression evaluator for ${ ... } supporting +, -, *, /, parentheses, identifiers and member access
+    private fun evaluateTemplateExpr(text: String): Any? {
+        // --- Lexer ---
+        data class Tok(val type: String, val s: String)
+        val src = text.trim()
+        val toks = mutableListOf<Tok>()
+        var i = 0
+        fun isIdStart(c: Char) = c == '_' || c.isLetter()
+        fun isIdPart(c: Char) = c == '_' || c.isLetterOrDigit()
+        while (i < src.length) {
+            val c = src[i]
+            when {
+                c.isWhitespace() -> { i++ }
+                c.isDigit() -> {
+                    val start = i
+                    while (i < src.length && src[i].isDigit()) i++
+                    toks += Tok("NUM", src.substring(start, i))
+                }
+                isIdStart(c) -> {
+                    val start = i
+                    i++
+                    while (i < src.length && isIdPart(src[i])) i++
+                    toks += Tok("ID", src.substring(start, i))
+                }
+                c == '"' -> {
+                    // simple string literal support inside template
+                    val start = ++i
+                    while (i < src.length && src[i] != '"') i++
+                    val lit = src.substring(start, i)
+                    if (i < src.length && src[i] == '"') i++
+                    toks += Tok("STR", lit)
+                }
+                c == '.' -> { toks += Tok("DOT", "."); i++ }
+                c == '+' -> { toks += Tok("PLUS", "+"); i++ }
+                c == '-' -> { toks += Tok("MINUS", "-"); i++ }
+                c == '*' -> { toks += Tok("MUL", "*"); i++ }
+                c == '/' -> { toks += Tok("DIV", "/"); i++ }
+                c == '(' -> { toks += Tok("LP", "("); i++ }
+                c == ')' -> { toks += Tok("RP", ")"); i++ }
+                else -> {
+                    // unsupported char -> treat as text
+                    return src
+                }
+            }
+        }
+        var p = 0
+        fun peek(t: String) = p < toks.size && toks[p].type == t
+        fun eat(t: String): Tok { val tok = toks.getOrNull(p); require(tok != null && tok.type == t) {"Expected $t"}; p++; return tok }
+
+        // --- Parser (recursive descent) ---
+        fun parseExpr(): Any? {
+            fun parseTerm(): Any? {
+                fun parseFactor(): Any? {
+                    when {
+                        peek("NUM") -> return eat("NUM").s.toInt()
+                        peek("STR") -> return eat("STR").s
+                        peek("LP") -> { eat("LP"); val v = parseExpr(); eat("RP"); return v }
+                        peek("ID") -> {
+                            var cur: Any? = variables[eat("ID").s]
+                            while (peek("DOT")) {
+                                eat("DOT")
+                                val name = eat("ID").s
+                                cur = when (cur) {
+                                    is DataInstance -> cur.fields[name]
+                                    else -> return null
+                                }
+                            }
+                            return cur
+                        }
+                        peek("MINUS") -> { eat("MINUS"); val v = parseFactor(); return when (v) { is Int -> -v; is String -> v; else -> null } }
+                        peek("PLUS") -> { eat("PLUS"); return parseFactor() }
+                        else -> return null
+                    }
+                }
+                var left = parseFactor()
+                while (peek("MUL") || peek("DIV")) {
+                    val op = toks[p++].type
+                    val right = parseFactor()
+                    left = when (op) {
+                        "MUL" -> (left as? Int)?.let { l -> (right as? Int)?.let { r -> l * r } } ?: return null
+                        "DIV" -> (left as? Int)?.let { l -> (right as? Int)?.let { r -> if (r == 0) return null else l / r } } ?: return null
+                        else -> left
+                    }
+                }
+                return left
+            }
+            var left = parseTerm()
+            while (peek("PLUS") || peek("MINUS")) {
+                val op = toks[p++].type
+                val right = parseTerm()
+                left = when (op) {
+                    "PLUS" -> when {
+                        left is String || right is String -> "$left$right"
+                        left is Int && right is Int -> left + right
+                        else -> return null
+                    }
+                    "MINUS" -> (left as? Int)?.let { l -> (right as? Int)?.let { r -> l - r } } ?: return null
+                    else -> left
+                }
+            }
+            return left
+        }
+
+        return parseExpr()
     }
 
     private fun executeFunction(name: String, args: List<Any?>): Any? {
@@ -687,9 +809,11 @@ fun test() {
         data class Person(name, age) // CHG
         var user = Person("Alice", 30)
         showAlert("Person name = " + user.name)
+        showAlert("Person name = ${'$'}{user.name}") // CHG: interpolation demo
         showAlert("Person age = " + user.age)
         user.age = user.age + 1
         showAlert("Person age after birthday = " + user.age)
+        showAlert("Next year age = ${'$'}{user.age + 1}") // CHG: expression interpolation
         /* Ende des Testcodes */
     """.trimIndent()
 
