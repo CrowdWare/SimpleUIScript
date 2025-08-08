@@ -527,6 +527,7 @@ class Interpreter {
                     toks += Tok("STR", lit)
                 }
                 c == '.' -> { toks += Tok("DOT", "."); i++ }
+                c == ',' -> { toks += Tok("COMMA", ","); i++ } // CHG: for call arguments
                 c == '+' -> { toks += Tok("PLUS", "+"); i++ }
                 c == '-' -> { toks += Tok("MINUS", "-"); i++ }
                 c == '*' -> { toks += Tok("MUL", "*"); i++ }
@@ -541,7 +542,27 @@ class Interpreter {
         }
         var p = 0
         fun peek(t: String) = p < toks.size && toks[p].type == t
-        fun eat(t: String): Tok { val tok = toks.getOrNull(p); require(tok != null && tok.type == t) {"Expected $t"}; p++; return tok }
+        fun eat(t: String): Tok { val tok = toks.getOrNull(p); require(tok != null && tok.type == t) {"Expected ${'$'}t"}; p++; return tok }
+
+        // --- Reflection helper for method calls ---
+        fun callMethod(receiver: Any?, name: String, args: List<Any?>): Any? {
+            if (receiver == null) return null
+            val cls = receiver.javaClass
+            // Try exact name, then a few common aliases
+            val candidateNames = sequence {
+                yield(name)
+                // CHG: simple aliases to be friendly with Kotlin naming
+                if (name.equals("toUpper", true)) { yield("toUpperCase") ; yield("uppercase") }
+                if (name.equals("toLower", true)) { yield("toLowerCase") ; yield("lowercase") }
+            }.toList()
+            val methods = cls.methods.filter { m -> candidateNames.any { it.equals(m.name, ignoreCase = false) } && m.parameterCount == args.size }
+            val m = methods.firstOrNull()
+            return try {
+                m?.invoke(receiver, *args.toTypedArray())
+            } catch (e: Exception) {
+                null
+            }
+        }
 
         // --- Parser (recursive descent) ---
         fun parseExpr(): Any? {
@@ -552,13 +573,27 @@ class Interpreter {
                         peek("STR") -> return eat("STR").s
                         peek("LP") -> { eat("LP"); val v = parseExpr(); eat("RP"); return v }
                         peek("ID") -> {
+                            // base identifier value
                             var cur: Any? = variables[eat("ID").s]
-                            while (peek("DOT")) {
+                            // member access and calls: .name, .name(args)
+                            loop@ while (peek("DOT")) {
                                 eat("DOT")
-                                val name = eat("ID").s
-                                cur = when (cur) {
-                                    is DataInstance -> cur.fields[name]
-                                    else -> return null
+                                val member = eat("ID").s
+                                // optional call: (args)
+                                if (peek("LP")) {
+                                    eat("LP")
+                                    val args = mutableListOf<Any?>()
+                                    if (!peek("RP")) {
+                                        args += parseExpr()
+                                        while (peek("COMMA")) { eat("COMMA"); args += parseExpr() }
+                                    }
+                                    eat("RP")
+                                    cur = callMethod(cur, member, args)
+                                } else {
+                                    cur = when (cur) {
+                                        is DataInstance -> cur.fields[member]
+                                        else -> null
+                                    }
                                 }
                             }
                             return cur
@@ -586,7 +621,7 @@ class Interpreter {
                 val right = parseTerm()
                 left = when (op) {
                     "PLUS" -> when {
-                        left is String || right is String -> "$left$right"
+                        left is String || right is String -> "${'$'}left${'$'}right"
                         left is Int && right is Int -> left + right
                         else -> return null
                     }
@@ -814,6 +849,8 @@ fun test() {
         user.age = user.age + 1
         showAlert("Person age after birthday = " + user.age)
         showAlert("Next year age = ${'$'}{user.age + 1}") // CHG: expression interpolation
+        showAlert("Upper name = ${'$'}{user.name.toUpper()}") // CHG: method call (alias to toUpperCase)
+        showAlert("Substring(0,3) = ${'$'}{user.name.substring(0, 3)}") // CHG: method call with params
         /* Ende des Testcodes */
     """.trimIndent()
 
