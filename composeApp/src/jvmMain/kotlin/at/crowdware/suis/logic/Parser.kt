@@ -22,6 +22,8 @@ data class IfStatement(
 
 data class VarDeclaration(val name: String, val value: Expression) : Statement()
 data class Assignment(val name: String, val value: Expression) : Statement()
+// CHG: Assignment to a member (e.g., obj.field = expr)
+data class MemberAssignment(val target: MemberAccess, val value: Expression) : Statement()
 data class ExpressionStatement(val expression: Expression) : Statement()
 
 data class WhileStatement(
@@ -43,6 +45,11 @@ data class ContinueStatement(val dummy: Unit = Unit) : Statement()
 
 // Return Statement
 data class ReturnStatement(val value: Expression?) : Statement()
+// CHG: Data class declaration support
+data class DataClassDeclaration(
+    val name: String,
+    val fields: List<String>
+) : Statement()
 
 // Function Definition
 data class FunctionDeclaration(
@@ -66,6 +73,8 @@ data class NumberLiteral(val value: Int) : Expression()
 data class BooleanLiteral(val value: Boolean) : Expression()
 
 data class Identifier(val name: String) : Expression()
+// CHG: Member access expression (e.g., obj.field)
+data class MemberAccess(val receiver: Expression, val member: String) : Expression()
 
 // Postfix-Inkrement
 data class PostfixExpression(
@@ -103,6 +112,8 @@ object MiniLanguageGrammar : Grammar<List<Statement>>() {
     val RETURN by literalToken("return")
     val TRUE by literalToken("true")
     val FALSE by literalToken("false")
+    // CHG: data classes keyword
+    val DATA by literalToken("data")
 
     // Single character tokens
     val LT by literalToken("<")
@@ -118,6 +129,8 @@ object MiniLanguageGrammar : Grammar<List<Statement>>() {
     val LPAREN by literalToken("(")
     val RPAREN by literalToken(")")
     val COMMA by literalToken(",")
+    // CHG: dot operator for member access
+    val DOT by literalToken(".")
     val SEMICOLON by literalToken(";")
 
     // Regex tokens
@@ -126,6 +139,7 @@ object MiniLanguageGrammar : Grammar<List<Statement>>() {
     val IDENTIFIER by regexToken("[a-zA-Z_][a-zA-Z0-9_]*")
 
     // Parser Declarations
+    // CHG: top-level expression now goes through logicalExpression (unchanged)
     val expression: Parser<Expression> by parser { logicalExpression }
 
     // Basic Parsers
@@ -147,12 +161,24 @@ object MiniLanguageGrammar : Grammar<List<Statement>>() {
         if (op != null) PostfixExpression(expr, op.text) else expr
     }
 
+    // CHG: (-DOT and IDENTIFIER) yields IDENTIFIER TokenMatch in this BetterParse version
+    val memberTail: Parser<String> = (-DOT and IDENTIFIER).map { id ->
+        (id as com.github.h0tk3y.betterParse.lexer.TokenMatch).text
+    }
+    val memberExpression: Parser<Expression> =
+        (postfixExpression and optional<String>(memberTail))
+            .map { pair ->
+                val expr: Expression = pair.t1
+                val name: String? = pair.t2
+                if (name != null) MemberAccess(expr, name) else expr
+            }
+
     // Operator Precedence
-    // Unäre Operatoren mit map
+    // CHG: unary now sits above memberExpression
     val unaryExpression: Parser<Expression> by parser {
         ((NOT or PLUS or MINUS) and unaryExpression).map { (token, expr) ->
             UnaryExpression(token.text, expr)
-        } or postfixExpression
+        } or memberExpression
     }
     val multiplicativeExpression by leftAssociative(unaryExpression, MULT or DIV) { l, op, r ->
         BinaryExpression(l, op.text, r)
@@ -175,7 +201,16 @@ object MiniLanguageGrammar : Grammar<List<Statement>>() {
 
     // Statements
     val varDeclaration by (-VAR and IDENTIFIER and -ASSIGN and expression) use { VarDeclaration(t1.text, t2) }
-    val assignment by (IDENTIFIER and -ASSIGN and expression) use { Assignment(t1.text, t2) }
+    // CHG: assignment supports identifiers and member targets
+    val assignment: Parser<Statement> by parser {
+        (memberExpression and -ASSIGN and expression).map { (lhs, rhs) ->
+            when (lhs) {
+                is Identifier -> Assignment(lhs.name, rhs)
+                is MemberAccess -> MemberAssignment(lhs, rhs)
+                else -> error("Invalid assignment target")
+            }
+        }
+    }
     val expressionStatement by expression use { ExpressionStatement(this) }
     val blockStatements: Parser<List<Statement>> by parser {
         separatedTerms(statement, WS, acceptZero = true)
@@ -229,15 +264,23 @@ object MiniLanguageGrammar : Grammar<List<Statement>>() {
 
     // Function Declaration
     val parameterList by separatedTerms(IDENTIFIER, COMMA, acceptZero = true)
-    val functionDeclaration: Parser<Statement> by parser {
-        FUN and IDENTIFIER and LPAREN and parameterList and RPAREN and
-                LBRACE and blockStatements and RBRACE
-    }.map { (_, name, _, params, _, _, body, _) ->
-        FunctionDeclaration(name.text, params.map { it.text }, body)
+    val functionDeclaration: Parser<Statement> by (
+        -FUN and IDENTIFIER and -LPAREN and parameterList and -RPAREN and -LBRACE and blockStatements and -RBRACE
+    ) use {
+        // CHG: simplified tuple after skipping punctuation and 'fun'
+        FunctionDeclaration(t1.text, t2.map { it.text }, t3)
+    }
+
+    // CHG: data class declaration: data Name(field1, field2)
+    val dataClassDeclaration: Parser<Statement> by (
+        -DATA and IDENTIFIER and -LPAREN and parameterList and -RPAREN
+    ) use {
+        // CHG: simplified tuple after skipping punctuation and 'data'
+        DataClassDeclaration(t1.text, t2.map { it.text })
     }
 
     val statement: Parser<Statement> by parser {
-        functionDeclaration or varDeclaration or assignment or ifStatement or whileStatement or forStatement or
+        functionDeclaration or dataClassDeclaration or varDeclaration or assignment or ifStatement or whileStatement or forStatement or
                 breakStatement or continueStatement or returnStatement or expressionStatement
     }
     override val rootParser by separatedTerms(statement, WS, acceptZero = true)
@@ -247,6 +290,13 @@ object MiniLanguageGrammar : Grammar<List<Statement>>() {
 class Interpreter {
     private val variables = mutableMapOf<String, Any>()
     private val functions = mutableMapOf<String, FunctionDeclaration>()
+    // CHG: registry for data classes
+    private val dataClasses = mutableMapOf<String, DataClassDeclaration>()
+
+    // CHG: runtime instance for data classes
+    data class DataInstance(val className: String, val fields: MutableMap<String, Any?>) {
+        override fun toString(): String = "${'$'}className${'$'}fields"
+    }
 
     init {
         variables["name"] = "Art"
@@ -255,8 +305,10 @@ class Interpreter {
     fun interpret(statements: List<Statement>) {
         // Erste Phase: Funktionsdeklarationen sammeln
         statements.forEach { statement ->
-            if (statement is FunctionDeclaration) {
-                functions[statement.name] = statement
+            when (statement) {
+                is FunctionDeclaration -> functions[statement.name] = statement
+                is DataClassDeclaration -> dataClasses[statement.name] = statement
+                else -> {}
             }
         }
 
@@ -275,6 +327,13 @@ class Interpreter {
                 val value = evaluateExpression(statement.value)
                 variables[statement.name] = value ?: Unit
                 println("Variable '${statement.name}' zugewiesen = $value")
+            }
+            // CHG: member assignment
+            is MemberAssignment -> {
+                val target = evaluateExpression(statement.target.receiver)
+                val value = evaluateExpression(statement.value)
+                val inst = target as? DataInstance ?: error("Member assignment on non-object")
+                inst.fields[statement.target.member] = value
             }
             is IfStatement -> {
                 val conditionResult = evaluateExpression(statement.condition)
@@ -340,6 +399,9 @@ class Interpreter {
                 // Funktionsdeklarationen werden bereits in interpret() verarbeitet
                 // Hier nichts tun
             }
+            is DataClassDeclaration -> {
+                // Already handled in interpret()
+            }
             is ExpressionStatement -> {
                 evaluateExpression(statement.expression)
             }
@@ -365,6 +427,12 @@ class Interpreter {
                     }
                     else -> error("Unknown postfix operator: ${expression.operator}")
                 }
+            }
+            // CHG: member access
+            is MemberAccess -> {
+                val recv = evaluateExpression(expression.receiver)
+                val inst = recv as? DataInstance ?: error("Member access on non-object")
+                inst.fields[expression.member]
             }
             is UnaryExpression -> {
                 val v = evaluateExpression(expression.expr)
@@ -414,12 +482,19 @@ class Interpreter {
             "submit"    -> { println("submit() wurde aufgerufen"); Unit }
             "showAlert" -> { println("Alert: ${args.firstOrNull() ?: "No message"}"); Unit }
             else -> {
+                // CHG: data class constructor call
+                dataClasses[name]?.let { dc ->
+                    if (args.size != dc.fields.size) error("Data class '${'$'}name' expects ${'$'}{dc.fields.size} args, got ${'$'}{args.size}")
+                    val fieldMap = mutableMapOf<String, Any?>()
+                    dc.fields.forEachIndexed { idx, f -> fieldMap[f] = args[idx] }
+                    return DataInstance(dc.name, fieldMap)
+                }
                 // Benutzerdefinierte Funktion
-                val function = functions[name] ?: error("Unknown function: $name")
+                val function = functions[name] ?: error("Unknown function: ${'$'}name")
 
                 // Parameter-Anzahl prüfen
                 if (args.size != function.parameters.size) {
-                    error("Function '$name' expects ${function.parameters.size} arguments, got ${args.size}")
+                    error("Function '${'$'}name' expects ${'$'}{function.parameters.size} arguments, got ${'$'}{args.size}")
                 }
 
                 // Neuen Scope für Funktionsausführung erstellen
@@ -607,6 +682,13 @@ fun test() {
             }
             showAlert("While q = " + q)
         }
+        /* Data class tests */
+        data Person(name, age)
+        var user = Person("Alice", 30)
+        showAlert("Person name = " + user.name)
+        showAlert("Person age = " + user.age)
+        user.age = user.age + 1
+        showAlert("Person age after birthday = " + user.age)
         /* Ende des Testcodes */
     """.trimIndent()
 
