@@ -31,7 +31,6 @@ data class WhileStatement(
     val body: List<Statement>
 ) : Statement()
 
-// Neue for-Schleife
 data class ForStatement(
     val init: Statement?,
     val condition: Expression?,
@@ -39,31 +38,24 @@ data class ForStatement(
     val body: List<Statement>
 ) : Statement()
 
-// Break und Continue Statements
 data class BreakStatement(val dummy: Unit = Unit) : Statement()
 data class ContinueStatement(val dummy: Unit = Unit) : Statement()
-
-// Return Statement
 data class ReturnStatement(val value: Expression?) : Statement()
-// CHG: Data class declaration support
 data class DataClassDeclaration(
     val name: String,
     val fields: List<String>
 ) : Statement()
 
-// Function Definition
 data class FunctionDeclaration(
     val name: String,
     val parameters: List<String>,
     val body: List<Statement>
 ) : Statement()
 
-// Exception-Klassen für Kontrollfluss
 class BreakException : Exception()
 class ContinueException : Exception()
 class ReturnException(val value: Any?) : Exception()
 
-// Expressions
 sealed class Expression : ASTNode()
 data class UnaryExpression(val operator: String, val expr: Expression) : Expression()
 data class BinaryExpression(val left: Expression, val operator: String, val right: Expression) : Expression()
@@ -71,36 +63,27 @@ data class FunctionCall(val name: String, val arguments: List<Expression>) : Exp
 data class StringLiteral(val value: String) : Expression()
 data class NumberLiteral(val value: Int) : Expression()
 data class BooleanLiteral(val value: Boolean) : Expression()
-
 data class Identifier(val name: String) : Expression()
-// CHG: Member access expression (e.g., obj.field)
 data class MemberAccess(val receiver: Expression, val member: String) : Expression()
 
-// Postfix-Inkrement
 data class PostfixExpression(
     val expr: Expression,
     val operator: String
 ) : Expression()
 
-// Grammar Definition
 object MiniLanguageGrammar : Grammar<List<Statement>>() {
-    // WICHTIG: Whitespace und Kommentare zuerst definieren
     val WS by regexToken("\\s+", ignore = true)
     val LINE_COMMENT by regexToken("//[^\\r\\n]*", ignore = true)
-    // Neu: Blockkommentare /* */ - unterstützt auch mehrzeilige Kommentare
     val BLOCK_COMMENT by regexToken("/\\*[\\s\\S]*?\\*/", ignore = true)
 
-    // Multi-character operators first (längere Tokens haben Vorrang)
     val EQUALS by literalToken("==")
     val NOT_EQUALS by literalToken("!=")
     val LE by literalToken("<=")
     val GE by literalToken(">=")
     val PP by literalToken("++")
-    val MM by literalToken("--")  // Postfix-Dekrement hinzugefügt
+    val MM by literalToken("--")
     val AND by literalToken("&&")
     val OR by literalToken("||")
-
-    // Keywords
     val VAR by literalToken("var")
     val IF by literalToken("if")
     val ELSE by literalToken("else")
@@ -112,12 +95,8 @@ object MiniLanguageGrammar : Grammar<List<Statement>>() {
     val RETURN by literalToken("return")
     val TRUE by literalToken("true")
     val FALSE by literalToken("false")
-    // CHG: data classes keyword
     val DATA by literalToken("data")
-    // CHG: Kotlin-style 'class' keyword for 'data class'
     val CLASS by literalToken("class")
-
-    // Single character tokens
     val LT by literalToken("<")
     val GT by literalToken(">")
     val ASSIGN by literalToken("=")
@@ -131,20 +110,12 @@ object MiniLanguageGrammar : Grammar<List<Statement>>() {
     val LPAREN by literalToken("(")
     val RPAREN by literalToken(")")
     val COMMA by literalToken(",")
-    // CHG: dot operator for member access
     val DOT by literalToken(".")
     val SEMICOLON by literalToken(";")
-
-    // Regex tokens
     val STRING by regexToken("\"[^\"]*\"")
     val NUMBER by regexToken("\\d+")
     val IDENTIFIER by regexToken("[a-zA-Z_][a-zA-Z0-9_]*")
-
-    // Parser Declarations
-    // CHG: top-level expression now goes through logicalExpression (unchanged)
     val expression: Parser<Expression> by parser { logicalExpression }
-
-    // Basic Parsers
     val identifier by IDENTIFIER use { Identifier(text) }
     val stringLiteral by STRING use { StringLiteral(text.substring(1, text.length - 1)) }
     val numberLiteral by NUMBER use { NumberLiteral(text.toInt()) }
@@ -155,15 +126,11 @@ object MiniLanguageGrammar : Grammar<List<Statement>>() {
     val primaryExpression by (
             functionCall or stringLiteral or numberLiteral or booleanLiteral or identifier or parenthesizedExpression
             )
-
-    // Postfix-Inkrement/Dekrement-Parser
     val postfixExpression: Parser<Expression> by parser {
         primaryExpression and optional(PP or MM)
     }.map { (expr, op) ->
         if (op != null) PostfixExpression(expr, op.text) else expr
     }
-
-    // CHG: (-DOT and IDENTIFIER) yields IDENTIFIER TokenMatch in this BetterParse version
     val memberTail: Parser<String> = (-DOT and IDENTIFIER).map { id ->
         (id as com.github.h0tk3y.betterParse.lexer.TokenMatch).text
     }
@@ -175,8 +142,6 @@ object MiniLanguageGrammar : Grammar<List<Statement>>() {
                 if (name != null) MemberAccess(expr, name) else expr
             }
 
-    // Operator Precedence
-    // CHG: unary now sits above memberExpression
     val unaryExpression: Parser<Expression> by parser {
         ((NOT or PLUS or MINUS) and unaryExpression).map { (token, expr) ->
             UnaryExpression(token.text, expr)
@@ -201,9 +166,7 @@ object MiniLanguageGrammar : Grammar<List<Statement>>() {
         BinaryExpression(l, "||", r)
     }
 
-    // Statements
     val varDeclaration by (-VAR and IDENTIFIER and -ASSIGN and expression) use { VarDeclaration(t1.text, t2) }
-    // CHG: assignment supports identifiers and member targets
     val assignment: Parser<Statement> by parser {
         (memberExpression and -ASSIGN and expression).map { (lhs, rhs) ->
             when (lhs) {
@@ -246,7 +209,6 @@ object MiniLanguageGrammar : Grammar<List<Statement>>() {
         WhileStatement(cond, body)
     }
 
-    // For-Schleife Parser
     val forStatement: Parser<Statement> by parser {
         -FOR and -LPAREN and
                 optional(varDeclaration or assignment) and -SEMICOLON and
@@ -257,23 +219,18 @@ object MiniLanguageGrammar : Grammar<List<Statement>>() {
         ForStatement(init, condition, update, body)
     }
 
-    // Break und Continue Statements
     val breakStatement by BREAK use { BreakStatement() }
     val continueStatement by CONTINUE use { ContinueStatement() }
 
-    // Return Statement
     val returnStatement by (RETURN and optional(expression)) use { ReturnStatement(t2) }
 
-    // Function Declaration
     val parameterList by separatedTerms(IDENTIFIER, COMMA, acceptZero = true)
     val functionDeclaration: Parser<Statement> by (
         -FUN and IDENTIFIER and -LPAREN and parameterList and -RPAREN and -LBRACE and blockStatements and -RBRACE
     ) use {
-        // CHG: simplified tuple after skipping punctuation and 'fun'
         FunctionDeclaration(t1.text, t2.map { it.text }, t3)
     }
 
-    // CHG: Kotlin-style syntax: 'data class Name(field1, field2)'
     val dataClassDeclaration: Parser<Statement> by (
         -DATA and -CLASS and IDENTIFIER and -LPAREN and parameterList and -RPAREN
     ) use {
@@ -287,14 +244,11 @@ object MiniLanguageGrammar : Grammar<List<Statement>>() {
     override val rootParser by separatedTerms(statement, WS, acceptZero = true)
 }
 
-// Interpreter
 class Interpreter {
     private val variables = mutableMapOf<String, Any>()
     private val functions = mutableMapOf<String, FunctionDeclaration>()
-    // CHG: registry for data classes
     private val dataClasses = mutableMapOf<String, DataClassDeclaration>()
 
-    // CHG: runtime instance for data classes
     data class DataInstance(val className: String, val fields: MutableMap<String, Any?>) {
         override fun toString(): String = "${'$'}className${'$'}fields"
     }
@@ -304,7 +258,6 @@ class Interpreter {
     }
 
     fun interpret(statements: List<Statement>) {
-        // Erste Phase: Funktionsdeklarationen sammeln
         statements.forEach { statement ->
             when (statement) {
                 is FunctionDeclaration -> functions[statement.name] = statement
@@ -313,7 +266,6 @@ class Interpreter {
             }
         }
 
-        // Zweite Phase: Code ausführen
         statements.forEach { executeStatement(it) }
     }
 
@@ -329,7 +281,6 @@ class Interpreter {
                 variables[statement.name] = value ?: Unit
                 println("Variable '${statement.name}' zugewiesen = $value")
             }
-            // CHG: member assignment
             is MemberAssignment -> {
                 val target = evaluateExpression(statement.target.receiver)
                 val value = evaluateExpression(statement.value)
@@ -350,40 +301,31 @@ class Interpreter {
                         try {
                             statement.body.forEach { executeStatement(it) }
                         } catch (e: ContinueException) {
-                            // Continue zur nächsten Iteration
                             continue
                         }
                     }
                 } catch (e: BreakException) {
-                    // Break aus der Schleife
                 }
             }
-            // Neue for-Schleife Ausführung
             is ForStatement -> {
                 try {
-                    // Initialisierung
                     statement.init?.let { executeStatement(it) }
 
-                    // Schleife
                     while (true) {
-                        // Bedingung prüfen (wenn keine Bedingung vorhanden, endlos laufen)
                         if (statement.condition != null) {
                             val conditionResult = evaluateExpression(statement.condition)
                             if (conditionResult != true) break
                         }
 
                         try {
-                            // Schleifenkörper ausführen
                             statement.body.forEach { executeStatement(it) }
                         } catch (e: ContinueException) {
-                            // Continue - springe zum Update und zur nächsten Iteration
                         }
 
                         // Update-Statement ausführen
                         statement.update?.let { executeStatement(it) }
                     }
                 } catch (e: BreakException) {
-                    // Break aus der Schleife
                 }
             }
             is BreakStatement -> {
@@ -397,11 +339,10 @@ class Interpreter {
                 throw ReturnException(value)
             }
             is FunctionDeclaration -> {
-                // Funktionsdeklarationen werden bereits in interpret() verarbeitet
-                // Hier nichts tun
+
             }
             is DataClassDeclaration -> {
-                // Already handled in interpret()
+
             }
             is ExpressionStatement -> {
                 evaluateExpression(statement.expression)
@@ -411,7 +352,6 @@ class Interpreter {
 
     private fun evaluateExpression(expression: Expression): Any? {
         return when (expression) {
-            // Handle postfix increment/decrement
             is PostfixExpression -> {
                 val id = expression.expr as? Identifier
                     ?: error("'++/--' only on identifiers")
@@ -429,7 +369,6 @@ class Interpreter {
                     else -> error("Unknown postfix operator: ${expression.operator}")
                 }
             }
-            // CHG: member access
             is MemberAccess -> {
                 val recv = evaluateExpression(expression.receiver)
                 val inst = recv as? DataInstance ?: error("Member access on non-object")
@@ -472,7 +411,6 @@ class Interpreter {
                 executeFunction(expression.name, args)
             }
             is StringLiteral  -> {
-                // CHG: Kotlin-style string interpolation: "...${expr}..."
                 val s = expression.value
                 if (!s.contains("\${")) return s
                 val regex = Regex("\\$\\{([^}]*)}" )
@@ -494,9 +432,7 @@ class Interpreter {
         }
     }
 
-    // CHG: expression evaluator for ${ ... } supporting +, -, *, /, parentheses, identifiers and member access
     private fun evaluateTemplateExpr(text: String): Any? {
-        // --- Lexer ---
         data class Tok(val type: String, val s: String)
         val src = text.trim()
         val toks = mutableListOf<Tok>()
@@ -519,7 +455,6 @@ class Interpreter {
                     toks += Tok("ID", src.substring(start, i))
                 }
                 c == '"' -> {
-                    // simple string literal support inside template
                     val start = ++i
                     while (i < src.length && src[i] != '"') i++
                     val lit = src.substring(start, i)
@@ -527,7 +462,7 @@ class Interpreter {
                     toks += Tok("STR", lit)
                 }
                 c == '.' -> { toks += Tok("DOT", "."); i++ }
-                c == ',' -> { toks += Tok("COMMA", ","); i++ } // CHG: for call arguments
+                c == ',' -> { toks += Tok("COMMA", ","); i++ }
                 c == '+' -> { toks += Tok("PLUS", "+"); i++ }
                 c == '-' -> { toks += Tok("MINUS", "-"); i++ }
                 c == '*' -> { toks += Tok("MUL", "*"); i++ }
@@ -535,7 +470,6 @@ class Interpreter {
                 c == '(' -> { toks += Tok("LP", "("); i++ }
                 c == ')' -> { toks += Tok("RP", ")"); i++ }
                 else -> {
-                    // unsupported char -> treat as text
                     return src
                 }
             }
@@ -544,14 +478,12 @@ class Interpreter {
         fun peek(t: String) = p < toks.size && toks[p].type == t
         fun eat(t: String): Tok { val tok = toks.getOrNull(p); require(tok != null && tok.type == t) {"Expected ${'$'}t"}; p++; return tok }
 
-        // --- Reflection helper for method calls ---
         fun callMethod(receiver: Any?, name: String, args: List<Any?>): Any? {
             if (receiver == null) return null
             val cls = receiver.javaClass
-            // Try exact name, then a few common aliases
+
             val candidateNames = sequence {
                 yield(name)
-                // CHG: simple aliases to be friendly with Kotlin naming
                 if (name.equals("toUpper", true)) { yield("toUpperCase") ; yield("uppercase") }
                 if (name.equals("toLower", true)) { yield("toLowerCase") ; yield("lowercase") }
             }.toList()
@@ -564,7 +496,6 @@ class Interpreter {
             }
         }
 
-        // --- Parser (recursive descent) ---
         fun parseExpr(): Any? {
             fun parseTerm(): Any? {
                 fun parseFactor(): Any? {
@@ -573,13 +504,10 @@ class Interpreter {
                         peek("STR") -> return eat("STR").s
                         peek("LP") -> { eat("LP"); val v = parseExpr(); eat("RP"); return v }
                         peek("ID") -> {
-                            // base identifier value
                             var cur: Any? = variables[eat("ID").s]
-                            // member access and calls: .name, .name(args)
                             loop@ while (peek("DOT")) {
                                 eat("DOT")
                                 val member = eat("ID").s
-                                // optional call: (args)
                                 if (peek("LP")) {
                                     eat("LP")
                                     val args = mutableListOf<Any?>()
@@ -640,41 +568,32 @@ class Interpreter {
             "submit"    -> { println("submit() wurde aufgerufen"); Unit }
             "showAlert" -> { println("Alert: ${args.firstOrNull() ?: "No message"}"); Unit }
             else -> {
-                // CHG: data class constructor call
                 dataClasses[name]?.let { dc ->
                     if (args.size != dc.fields.size) error("Data class '${'$'}name' expects ${'$'}{dc.fields.size} args, got ${'$'}{args.size}")
                     val fieldMap = mutableMapOf<String, Any?>()
                     dc.fields.forEachIndexed { idx, f -> fieldMap[f] = args[idx] }
                     return DataInstance(dc.name, fieldMap)
                 }
-                // Benutzerdefinierte Funktion
                 val function = functions[name] ?: error("Unknown function: ${'$'}name")
 
-                // Parameter-Anzahl prüfen
                 if (args.size != function.parameters.size) {
                     error("Function '${'$'}name' expects ${'$'}{function.parameters.size} arguments, got ${'$'}{args.size}")
                 }
 
-                // Neuen Scope für Funktionsausführung erstellen
                 val savedVariables = variables.toMap()
 
                 try {
-                    // Parameter als lokale Variablen setzen
                     function.parameters.forEachIndexed { index, param ->
                         variables[param] = args[index] ?: Unit
                     }
 
-                    // Funktionskörper ausführen
                     function.body.forEach { executeStatement(it) }
 
-                    // Standardrückgabe wenn kein explizites return
                     null
 
                 } catch (e: ReturnException) {
-                    // Return-Statement gefangen
                     e.value
                 } finally {
-                    // Originale Variablen wiederherstellen (außer globale)
                     variables.clear()
                     variables.putAll(savedVariables)
                 }

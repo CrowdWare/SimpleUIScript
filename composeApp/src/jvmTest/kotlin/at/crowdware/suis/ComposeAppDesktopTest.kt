@@ -242,7 +242,7 @@ class ComposeAppDesktopTest {
             MiniLanguageGrammar.parseToEnd(code)
         }
     }
-    
+
     private fun getFunctionParamNames(fn: FunctionDeclaration): List<String> {
         val cls = fn.javaClass
         val candidates = listOf("params", "parameters", "paramNames", "args", "arguments")
