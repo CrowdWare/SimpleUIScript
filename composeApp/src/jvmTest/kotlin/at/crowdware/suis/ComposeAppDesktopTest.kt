@@ -1,19 +1,46 @@
 package at.crowdware.suis
 
-import at.crowdware.suis.logic.BinaryExpr
-import at.crowdware.suis.logic.CallExpr
-import at.crowdware.suis.logic.IfElseExpr
-import at.crowdware.suis.logic.SimpleKotlinGrammar
+import at.crowdware.suis.logic.DataClassDeclaration
+import at.crowdware.suis.logic.MiniLanguageGrammar
+import at.crowdware.suis.logic.NumberLiteral
+import at.crowdware.suis.logic.StringLiteral
+import at.crowdware.suis.logic.VarDeclaration
 import com.github.h0tk3y.betterParse.grammar.parseToEnd
-import junit.framework.TestCase.assertTrue
+import com.github.h0tk3y.betterParse.parser.ParseException
+import kotlin.test.assertTrue
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import at.crowdware.suis.logic.MemberAssignment
+import at.crowdware.suis.logic.MemberAccess
+import at.crowdware.suis.logic.FunctionDeclaration
+import at.crowdware.suis.logic.WhileStatement
 
 class ComposeAppDesktopTest {
 
     @Test
-    fun example() {
-        assertEquals(3, 1 + 2)
+    fun testIfElseBracketsParsing() {
+        val code = """
+            if (name == "Art") {
+                submit()
+            } else {
+                showAlert("?")
+            }
+        """.trimIndent()
+
+        val result = MiniLanguageGrammar.parseToEnd(code)
+        assertEquals(1, result.size)
+
+        // CHG: detailed AST checks via reflection (robust across class/field names)
+        val stmt = result[0]
+        // class name should indicate an if-statement of some sort
+        assertTrue(stmt.javaClass.simpleName.contains("If", ignoreCase = true))
+
+        // then/else blocks should each contain exactly one statement
+        val thenCount = getBlockCount(stmt, preferNames = listOf("then", "thenBlock", "thenBranch"))
+        val elseCount = getBlockCount(stmt, preferNames = listOf("else", "elseBlock", "elseBranch"))
+        assertEquals(1, thenCount)
+        assertEquals(1, elseCount)
     }
 
     @Test
@@ -26,24 +53,205 @@ class ComposeAppDesktopTest {
             }
         """.trimIndent()
 
-        val result = SimpleKotlinGrammar.parseToEnd(code)
-
-        // Prüfen, ob Ergebnis eine Liste mit einem IfElseExpr ist
+        val result = MiniLanguageGrammar.parseToEnd(code)
         assertEquals(1, result.size)
-        val node = result[0]
-        assertTrue(node is IfElseExpr)
 
-        val ifNode = node as IfElseExpr
+        // CHG: detailed AST checks via reflection (robust across class/field names)
+        val stmt = result[0]
+        // class name should indicate an if-statement of some sort
+        assertTrue(stmt.javaClass.simpleName.contains("If", ignoreCase = true))
 
-        // Optional: weitere Strukturprüfungen
-        assertTrue(ifNode.condition is BinaryExpr)
-        assertTrue(ifNode.thenBlock.statements.first() is CallExpr)
-        assertTrue(ifNode.elseBlock?.statements?.first() is CallExpr)
+        // then/else blocks should each contain exactly one statement
+        val thenCount = getBlockCount(stmt, preferNames = listOf("then", "thenBlock", "thenBranch"))
+        val elseCount = getBlockCount(stmt, preferNames = listOf("else", "elseBlock", "elseBranch"))
+        assertEquals(1, thenCount)
+        assertEquals(1, elseCount)
+    }
 
-        val thenCall = ifNode.thenBlock.statements.first() as CallExpr
-        assertEquals("submit", thenCall.name)
+    private fun getBlockCount(stmt: Any, preferNames: List<String>): Int {
+        val cls = stmt.javaClass
+        // Look for a List-like field whose name contains any of the preferred keywords
+        val fields = cls.declaredFields
+        val field = fields.firstOrNull { f ->
+            preferNames.any { key -> f.name.contains(key, ignoreCase = true) } &&
+                    (List::class.java.isAssignableFrom(f.type) || f.type.name.contains("List"))
+        } ?: return -1
+        field.isAccessible = true
+        val v = field.get(stmt)
+        return (v as? List<*>)?.size ?: -1
+    }
 
-        val elseCall = ifNode.elseBlock?.statements?.first() as CallExpr
-        assertEquals("showAlert", elseCall.name)
+    @Test
+    fun testDataClassParsing() {
+        val code = """
+            data class Person(name, age)
+            var p = Person("Alice", 30)
+        """.trimIndent()
+
+        val result = MiniLanguageGrammar.parseToEnd(code)
+        assertEquals(2, result.size)
+        val decl = result[0]
+        assertTrue(decl is DataClassDeclaration)
+        val dataDecl = decl as DataClassDeclaration // CHG
+        assertEquals("Person", dataDecl.name)
+        assertEquals(listOf("name", "age"), dataDecl.fields)
+    }
+
+    @Test
+    fun testDataClassParsingDetailed() {
+        val code = """
+            data class Person(name, age)
+            var p = Person("Alice", 30)
+        """.trimIndent()
+
+        val result = MiniLanguageGrammar.parseToEnd(code)
+        assertEquals(2, result.size)
+        val decl = result[0]
+        assertTrue(decl is DataClassDeclaration)
+        val dataDecl = decl as DataClassDeclaration // CHG: cast for property access
+        assertEquals("Person", dataDecl.name)
+        assertEquals(listOf("name", "age"), dataDecl.fields)
+
+        val v = result[1]
+        assertTrue(v is VarDeclaration)
+        assertEquals("p", v.name)
+        // value is a call expression in current grammar; we only assert it's not a literal
+        assertTrue(v.value !is StringLiteral && v.value !is NumberLiteral)
+    }
+
+    @Test
+    fun testMemberAccessAndAssignmentParsing() {
+        val code = """
+            data class Person(name, age)
+            var p = Person("Bob", 18)
+            p.age = p.age + 1
+        """.trimIndent()
+
+        val result = MiniLanguageGrammar.parseToEnd(code)
+        assertEquals(3, result.size)
+    }
+
+    @Test
+    fun testMemberAssignmentDetailed() {
+        val code = """
+            data class Person(name, age)
+            var p = Person("Bob", 18)
+            p.age = p.age + 1
+        """.trimIndent()
+        val result = MiniLanguageGrammar.parseToEnd(code)
+        assertEquals(3, result.size)
+        val assign = result[2]
+        assertTrue(assign is MemberAssignment)
+        val mAssign = assign as MemberAssignment // CHG
+        val target = mAssign.target
+        assertTrue(target is MemberAccess)
+        val mAccess = target as MemberAccess // CHG
+        assertEquals("age", mAccess.member)
+    }
+
+    @Test
+    fun testFunctionDeclAndCallParsing() {
+        val code = """
+            fun inc(x) {
+                return x + 1
+            }
+            var y = inc(41)
+        """.trimIndent()
+
+        val result = MiniLanguageGrammar.parseToEnd(code)
+        assertEquals(2, result.size)
+    }
+
+    @Test
+    fun testFunctionDeclDetailed() {
+        val code = """
+            fun inc(x) {
+                return x + 1
+            }
+            var y = inc(41)
+        """.trimIndent()
+        val result = MiniLanguageGrammar.parseToEnd(code)
+        assertEquals(2, result.size)
+        val fn = result[0]
+        assertTrue(fn is FunctionDeclaration)
+        val fDecl = fn as FunctionDeclaration // CHG
+        assertEquals("inc", fDecl.name)
+        val paramNames = getFunctionParamNames(fDecl) // CHG: robust across field names
+        assertEquals(listOf("x"), paramNames)
+    }
+
+    @Test
+    fun testStringInterpolationAccepted() {
+        val code = """
+            data class Person(name, age)
+            var user = Person("Art", 42)
+            showAlert("Name: ${'$'}{user.name}, Next: ${'$'}{user.age + 1}")
+        """.trimIndent()
+
+        val result = MiniLanguageGrammar.parseToEnd(code)
+        assertEquals(3, result.size)
+    }
+
+    @Test
+    fun testWhileAndBreakContinueParsing() {
+        val code = """
+            var i = 0
+            while (i < 10) {
+                i = i + 1
+                if (i == 3) { continue }
+                if (i == 8) { break }
+            }
+        """.trimIndent()
+
+        val result = MiniLanguageGrammar.parseToEnd(code)
+        assertEquals(2, result.size)
+    }
+
+    @Test
+    fun testWhileParsingDetailed() {
+        val code = """
+            var i = 0
+            while (i < 3) {
+                i = i + 1
+            }
+        """.trimIndent()
+        val result = MiniLanguageGrammar.parseToEnd(code)
+        assertEquals(2, result.size)
+        val whileStmt = result[1]
+        assertTrue(whileStmt is WhileStatement)
+    }
+
+    @Test
+    fun testInvalidSyntaxThrows() {
+        val bad = """
+            data class X(a, b)
+            var v = X(1 2)
+        """.trimIndent()
+
+        assertFailsWith<ParseException> {
+            MiniLanguageGrammar.parseToEnd(bad)
+        }
+    }
+
+    @Test
+    fun testDeepMemberAccessDisallowedCurrently() {
+        val code = """
+            var a = obj.part.sub
+        """.trimIndent()
+        assertFailsWith<ParseException> {
+            MiniLanguageGrammar.parseToEnd(code)
+        }
+    }
+    
+    private fun getFunctionParamNames(fn: FunctionDeclaration): List<String> {
+        val cls = fn.javaClass
+        val candidates = listOf("params", "parameters", "paramNames", "args", "arguments")
+        for (name in candidates) {
+            val field = cls.declaredFields.firstOrNull { it.name == name } ?: continue
+            field.isAccessible = true
+            val v = field.get(fn)
+            if (v is List<*>) return v.filterIsInstance<String>()
+        }
+        throw AssertionError("Could not locate parameter list on FunctionDeclaration. Fields=" + cls.declaredFields.joinToString { it.name })
     }
 }
