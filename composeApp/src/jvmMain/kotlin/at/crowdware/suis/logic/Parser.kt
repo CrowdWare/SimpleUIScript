@@ -8,10 +8,25 @@ import com.github.h0tk3y.betterParse.lexer.literalToken
 import com.github.h0tk3y.betterParse.lexer.regexToken
 import com.github.h0tk3y.betterParse.parser.Parser
 
-// AST-Knoten
-sealed class ASTNode
+// Position information for better error messages
+data class Position(val line: Int, val column: Int) {
+    override fun toString(): String = "Zeile $line, Spalte $column"
+}
 
-sealed class Statement : ASTNode()
+// User-friendly error class
+class InterpreterError(
+    message: String, 
+    val position: Position? = null,
+    cause: Throwable? = null
+) : RuntimeException(
+    if (position != null) "Fehler bei $position: $message" else "Fehler: $message",
+    cause
+)
+
+// AST-Knoten
+sealed class ASTNode(val position: Position? = null)
+
+sealed class Statement(position: Position? = null) : ASTNode(position)
 
 // Statements
 data class IfStatement(
@@ -20,11 +35,25 @@ data class IfStatement(
     val elseBranch: List<Statement>?
 ) : Statement()
 
-data class VarDeclaration(val name: String, val value: Expression) : Statement()
-data class Assignment(val name: String, val value: Expression) : Statement()
+data class VarDeclaration(
+    val name: String, 
+    val value: Expression
+) : Statement()
+
+data class Assignment(
+    val name: String, 
+    val value: Expression
+) : Statement()
+
 // CHG: Assignment to a member (e.g., obj.field = expr)
-data class MemberAssignment(val target: MemberAccess, val value: Expression) : Statement()
-data class ExpressionStatement(val expression: Expression) : Statement()
+data class MemberAssignment(
+    val target: MemberAccess, 
+    val value: Expression
+) : Statement()
+
+data class ExpressionStatement(
+    val expression: Expression
+) : Statement()
 
 data class WhileStatement(
     val condition: Expression,
@@ -44,9 +73,18 @@ data class ForInStatement(
     val body: List<Statement>
 ) : Statement()
 
-data class BreakStatement(val dummy: Unit = Unit) : Statement()
-data class ContinueStatement(val dummy: Unit = Unit) : Statement()
-data class ReturnStatement(val value: Expression?) : Statement()
+data class BreakStatement(
+    val dummy: Unit = Unit
+) : Statement()
+
+data class ContinueStatement(
+    val dummy: Unit = Unit
+) : Statement()
+
+data class ReturnStatement(
+    val value: Expression?
+) : Statement()
+
 data class DataClassDeclaration(
     val name: String,
     val fields: List<String>
@@ -62,17 +100,54 @@ class BreakException : Exception()
 class ContinueException : Exception()
 class ReturnException(val value: Any?) : Exception()
 
-sealed class Expression : ASTNode()
-data class UnaryExpression(val operator: String, val expr: Expression) : Expression()
-data class BinaryExpression(val left: Expression, val operator: String, val right: Expression) : Expression()
-data class FunctionCall(val name: String, val arguments: List<Expression>) : Expression()
-data class StringLiteral(val value: String) : Expression()
-data class NumberLiteral(val value: Int) : Expression()
-data class BooleanLiteral(val value: Boolean) : Expression()
-data class Identifier(val name: String) : Expression()
-data class MemberAccess(val receiver: Expression, val member: String) : Expression()
-data class MethodCall(val receiver: Expression, val method: String, val arguments: List<Expression>) : Expression()
-data class ArrayLiteral(val elements: List<Expression>) : Expression()
+sealed class Expression(position: Position? = null) : ASTNode(position)
+
+data class UnaryExpression(
+    val operator: String, 
+    val expr: Expression
+) : Expression()
+
+data class BinaryExpression(
+    val left: Expression, 
+    val operator: String, 
+    val right: Expression
+) : Expression()
+
+data class FunctionCall(
+    val name: String, 
+    val arguments: List<Expression>
+) : Expression()
+
+data class StringLiteral(
+    val value: String
+) : Expression()
+
+data class NumberLiteral(
+    val value: Int
+) : Expression()
+
+data class BooleanLiteral(
+    val value: Boolean
+) : Expression()
+
+data class Identifier(
+    val name: String
+) : Expression()
+
+data class MemberAccess(
+    val receiver: Expression, 
+    val member: String
+) : Expression()
+
+data class MethodCall(
+    val receiver: Expression, 
+    val method: String, 
+    val arguments: List<Expression>
+) : Expression()
+
+data class ArrayLiteral(
+    val elements: List<Expression>
+) : Expression()
 
 data class PostfixExpression(
     val expr: Expression,
@@ -292,23 +367,27 @@ class Interpreter {
     }
 
     private fun executeStatement(statement: Statement) {
-        when (statement) {
-            is VarDeclaration -> {
-                val value = evaluateExpression(statement.value)
-                variables[statement.name] = value ?: Unit
-                println("Variable '${statement.name}' = $value")
-            }
-            is Assignment -> {
-                val value = evaluateExpression(statement.value)
-                variables[statement.name] = value ?: Unit
-                println("Variable '${statement.name}' zugewiesen = $value")
-            }
-            is MemberAssignment -> {
-                val target = evaluateExpression(statement.target.receiver)
-                val value = evaluateExpression(statement.value)
-                val inst = target as? DataInstance ?: error("Member assignment on non-object")
-                inst.fields[statement.target.member] = value
-            }
+        try {
+            when (statement) {
+                is VarDeclaration -> {
+                    val value = evaluateExpression(statement.value)
+                    variables[statement.name] = value ?: Unit
+                    println("Variable '${statement.name}' = $value")
+                }
+                is Assignment -> {
+                    val value = evaluateExpression(statement.value)
+                    variables[statement.name] = value ?: Unit
+                    println("Variable '${statement.name}' zugewiesen = $value")
+                }
+                is MemberAssignment -> {
+                    val target = evaluateExpression(statement.target.receiver)
+                    val value = evaluateExpression(statement.value)
+                    val inst = target as? DataInstance ?: throw InterpreterError(
+                        "Member-Zuweisung nur auf Objekten möglich",
+                        statement.position
+                    )
+                    inst.fields[statement.target.member] = value
+                }
             is IfStatement -> {
                 val conditionResult = evaluateExpression(statement.condition)
                 if (conditionResult == true) {
@@ -353,7 +432,10 @@ class Interpreter {
             is ForInStatement -> {
                 try {
                     val iterable = evaluateExpression(statement.iterable)
-                    val array = iterable as? MutableList<*> ?: error("for-in requires an array")
+                    val array = iterable as? MutableList<*> ?: throw InterpreterError(
+                        "for-in-Schleife kann nur über Arrays iterieren",
+                        statement.position
+                    )
                     
                     for (element in array) {
                         variables[statement.variable] = element ?: Unit
@@ -385,6 +467,17 @@ class Interpreter {
             is ExpressionStatement -> {
                 evaluateExpression(statement.expression)
             }
+        }
+        } catch (e: InterpreterError) {
+            throw e
+        } catch (e: BreakException) {
+            throw e  // Break-Exceptions sind normal für Schleifen
+        } catch (e: ContinueException) {
+            throw e  // Continue-Exceptions sind normal für Schleifen
+        } catch (e: ReturnException) {
+            throw e  // Return-Exceptions sind normal für Funktionen
+        } catch (e: Exception) {
+            throw InterpreterError("Unerwarteter Fehler beim Ausführen des Statements: ${e.message}", statement.position, e)
         }
     }
 
@@ -484,7 +577,15 @@ class Interpreter {
             }
             is NumberLiteral  -> expression.value
             is BooleanLiteral -> expression.value
-            is Identifier     -> variables[expression.name]
+            is Identifier     -> {
+                if (!variables.containsKey(expression.name)) {
+                    throw InterpreterError(
+                        "Variable '${expression.name}' ist nicht definiert",
+                        expression.position
+                    )
+                }
+                variables[expression.name]
+            }
         }
     }
 
@@ -696,7 +797,82 @@ class Interpreter {
     fun getVariable(name: String): Any? = variables[name]
 }
 
+// Parse error handler for user-friendly messages
+fun parseWithFriendlyErrors(code: String): List<Statement> {
+    try {
+        return MiniLanguageGrammar.parseToEnd(code)
+    } catch (e: Exception) {
+        // Convert technical parse errors to user-friendly messages
+        val errorMessage = e.message ?: "Unbekannter Parsing-Fehler"
+        val message = when {
+            errorMessage.contains("MismatchedToken") -> {
+                when {
+                    errorMessage.contains("expected=RBRACE") -> "Fehlende schließende geschweifte Klammer '}'"
+                    errorMessage.contains("expected=RPAREN") -> "Fehlende schließende runde Klammer ')'"
+                    errorMessage.contains("expected=RBRACKET") -> "Fehlende schließende eckige Klammer ']'"
+                    errorMessage.contains("expected=SEMICOLON") -> "Fehlende Semikolon ';'"
+                    errorMessage.contains("expected=IDENTIFIER") -> "Erwarteter Bezeichner (Variablenname)"
+                    errorMessage.contains("expected=NUMBER") -> "Erwartete Zahl"
+                    errorMessage.contains("expected=STRING") -> "Erwarteter Text in Anführungszeichen"
+                    errorMessage.contains("for \"for\"") -> "Syntaxfehler in for-Schleife - überprüfen Sie die Klammern und Syntax"
+                    errorMessage.contains("for \"if\"") -> "Syntaxfehler in if-Statement - überprüfen Sie die Klammern und Syntax"
+                    errorMessage.contains("for \"while\"") -> "Syntaxfehler in while-Schleife - überprüfen Sie die Klammern und Syntax"
+                    else -> "Syntaxfehler im Code - überprüfen Sie Klammern, Semikolons und Bezeichner"
+                }
+            }
+            errorMessage.contains("UnparsedRemainder") -> {
+                "Unerwarteter Code-Teil - möglicherweise fehlt eine schließende Klammer oder ein Semikolon"
+            }
+            errorMessage.contains("AlternativesFailure") -> {
+                "Code kann nicht geparst werden - überprüfen Sie die Syntax"
+            }
+            else -> "Parsing-Fehler: $errorMessage"
+        }
+        
+        throw InterpreterError(message)
+    }
+}
+
 fun test() {
+    // Test benutzerfreundliche Fehlermeldungen
+    println("=== TESTE BENUTZERFREUNDLICHE FEHLERMELDUNGEN ===")
+    
+    val errorTestCode = """
+        var obj = 5
+        obj.field = 10
+    """.trimIndent()
+
+    try {
+        val ast = parseWithFriendlyErrors(errorTestCode)
+        val interpreter = Interpreter()
+        interpreter.interpret(ast)
+    } catch (e: InterpreterError) {
+        println("✅ Benutzerfreundlicher Fehler abgefangen:")
+        println("   ${e.message}")
+    } catch (e: Exception) {
+        println("❌ Unerwarteter Fehler: ${e.message}")
+    }
+
+    println("\n=== TESTE BENUTZERFREUNDLICHE FEHLERMELDUNGEN Part 2 ===")
+
+    val errorTestCode2 = """
+        for (var a = 0; a < 10; a++) {
+            println(a.size)
+        }
+    """.trimIndent()
+
+    try {
+        val ast = parseWithFriendlyErrors(errorTestCode2)
+        val interpreter = Interpreter()
+        interpreter.interpret(ast)
+    } catch (e: InterpreterError) {
+        println("✅ Benutzerfreundlicher Parse-Fehler abgefangen:")
+        println("   ${e.message}")
+    } catch (e: Exception) {
+        println("❌ Unerwarteter Fehler: ${e.message}")
+    }
+
+
     // Test nur die Function-Deklaration
     val justFunctionCode = """
         fun inc(x) {
@@ -705,7 +881,7 @@ fun test() {
     """.trimIndent()
 
     try {
-        println("Testing ONLY function declaration...")
+        println("\nTesting ONLY function declaration...")
         val ast = MiniLanguageGrammar.parseToEnd(justFunctionCode)
         println("Function declaration parses successfully! AST size: ${ast.size}")
         
@@ -745,6 +921,31 @@ fun test() {
             return "Greeting sent to " + name
         }
         
+        fun factorial(n) {
+            if (n <= 1) {
+                return 1
+            }
+            return n * factorial(n - 1)
+        }
+        
+        fun fibonacci(n) {
+            if (n <= 1) {
+                return n
+            }
+            return fibonacci(n - 1) + fibonacci(n - 2)
+        }
+        
+        fun countDown(n) {
+            while (n > 0) {
+                showAlert("Countdown: " + n)
+                n = n - 1
+                if (n == 3) {
+                    return "Early exit at " + n
+                }
+            }
+            return "Countdown finished"
+        }
+        
         /* Teste benutzerdefinierte Funktionen */
         var result1 = add(5, 3)
         showAlert("add(5, 3) = " + result1)
@@ -752,19 +953,121 @@ fun test() {
         var result2 = greet("Alice")
         showAlert("greet result: " + result2)
         
+        var result3 = factorial(5)
+        showAlert("factorial(5) = " + result3)
+        
+        var result4 = fibonacci(6)
+        showAlert("fibonacci(6) = " + result4)
+        
+        var result5 = countDown(7)
+        showAlert("countDown result: " + result5)
+        
         /* Ursprüngliche Tests */
         var a = 4
         var b = 2
-        var c = a * b * 4 / 2
+        /* Berechnung von c */ var c = a * b * 4 / 2
         var d = a / b
         var flag = false
+        var neg = -a
+        var pos = +a
+        var inv = !flag
         
         showAlert("c = " + c + ", d = " + d)
+        showAlert("neg = " + neg + ", pos = " + pos + ", inv = " + inv)
 
         /* Teste mathematische Operationen */
         if (c == 8 && d == 2) {
             showAlert("Multiplikation und Division funktionieren!")
         }
+
+        if (!flag && neg < 0) {
+            showAlert("Unary operations work!")
+        }
+     
+        var count = 0
+        while (count < 3) {
+            showAlert("While Count = " + count)
+            count++
+        }
+        
+        /* 
+         * Neue for-Schleife Tests
+         * Diese können auch verschachtelte Kommentare enthalten
+         */
+        showAlert("Testing for-loop:")
+        for (var i = 0; i < 5; i++) {
+            showAlert("For loop i = " + i)
+        }
+        
+        /* for-Schleife mit externen Variablen */
+        showAlert("For loop with external variables:")
+        var j = 10
+        for (; j > 5; j = j - 1) {
+            showAlert("For loop j = " + j)
+        }
+        
+        /* for-Schleife ohne Initialisierung */
+        showAlert("For loop starting from existing variable:")
+        var k = 0
+        for (; k <= 2; k++) {
+            showAlert("For loop k = " + k)
+        }
+        
+        /* for-Schleife mit Dekrement */
+        showAlert("For loop with decrement:")
+        for (var m = 5; m > 0; m--) {
+            showAlert("For loop m = " + m)
+        }
+        
+        /*
+         * Break und Continue Tests
+         * Diese testen die Kontrollfluss-Mechanismen
+         */
+        showAlert("Testing break and continue:")
+        
+        /* Break Test */
+        showAlert("Break test - should stop at 3:")
+        for (var n = 0; n < 10; n++) {
+            if (n == 3) {
+                break
+            }
+            showAlert("Break test n = " + n)
+        }
+        
+        /* Continue Test */
+        showAlert("Continue test - should skip even numbers:")
+        for (var p = 0; p < 6; p++) {
+            if (p == 2 || p == 4) {
+                continue
+            }
+            showAlert("Continue test p = " + p)
+        }
+        
+        /* While mit break/continue */
+        showAlert("While loop with break and continue:")
+        var q = 0
+        while (q < 10) {
+            q++
+            if (q == 3 || q == 7) {
+                continue
+            }
+            if (q == 8) {
+                break
+            }
+            showAlert("While q = " + q)
+        }
+        /* Data class tests */
+        data class Person(name, age) // CHG
+        var user = Person("Alice", 30)
+        showAlert("Person name = " + user.name)
+        showAlert("Person name = ${'$'}{user.name}") // CHG: interpolation demo
+        showAlert("Person age = " + user.age)
+        user.age = user.age + 1
+        showAlert("Person age after birthday = " + user.age)
+        showAlert("Next year age = ${'$'}{user.age + 1}") // CHG: expression interpolation
+        showAlert("Upper name = ${'$'}{user.name.toUpper()}") // CHG: method call (alias to toUpperCase)
+        showAlert("Substring(0,3) = ${'$'}{user.name.substring(0, 3)}") // CHG: method call with params
+        
         
         /* Array Tests - Testing all required functionality */
         
@@ -846,7 +1149,6 @@ fun test() {
 
 // TODO:
 // - Blöcke mit deren Scopes {}
-// - Fehlerbehandlung mit Zeilennummer, Spalte
 // - Compound Assignment Operatoren (+=, -=, *=, /=)
 // - Prefix Increment/Decrement (++i, --i)
 // - Modulo-Operator (%)
