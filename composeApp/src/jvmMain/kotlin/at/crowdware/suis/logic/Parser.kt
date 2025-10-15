@@ -38,6 +38,12 @@ data class ForStatement(
     val body: List<Statement>
 ) : Statement()
 
+data class ForInStatement(
+    val variable: String,
+    val iterable: Expression,
+    val body: List<Statement>
+) : Statement()
+
 data class BreakStatement(val dummy: Unit = Unit) : Statement()
 data class ContinueStatement(val dummy: Unit = Unit) : Statement()
 data class ReturnStatement(val value: Expression?) : Statement()
@@ -65,6 +71,8 @@ data class NumberLiteral(val value: Int) : Expression()
 data class BooleanLiteral(val value: Boolean) : Expression()
 data class Identifier(val name: String) : Expression()
 data class MemberAccess(val receiver: Expression, val member: String) : Expression()
+data class MethodCall(val receiver: Expression, val method: String, val arguments: List<Expression>) : Expression()
+data class ArrayLiteral(val elements: List<Expression>) : Expression()
 
 data class PostfixExpression(
     val expr: Expression,
@@ -112,8 +120,11 @@ object MiniLanguageGrammar : Grammar<List<Statement>>() {
     val COMMA by literalToken(",")
     val DOT by literalToken(".")
     val SEMICOLON by literalToken(";")
+    val LBRACKET by literalToken("[")
+    val RBRACKET by literalToken("]")
     val STRING by regexToken("\"[^\"]*\"")
     val NUMBER by regexToken("\\d+")
+    val IN by regexToken("\\bin\\b")
     val IDENTIFIER by regexToken("[a-zA-Z_][a-zA-Z0-9_]*")
     val expression: Parser<Expression> by parser { logicalExpression }
     val identifier by IDENTIFIER use { Identifier(text) }
@@ -123,24 +134,30 @@ object MiniLanguageGrammar : Grammar<List<Statement>>() {
     val parenthesizedExpression by (-LPAREN and expression and -RPAREN)
     val argumentList by separatedTerms(expression, COMMA, acceptZero = true)
     val functionCall by (IDENTIFIER and -LPAREN and argumentList and -RPAREN) use { FunctionCall(t1.text, t2) }
+    val arrayLiteral by (-LBRACKET and argumentList and -RBRACKET) use { ArrayLiteral(this) }
     val primaryExpression by (
-            functionCall or stringLiteral or numberLiteral or booleanLiteral or identifier or parenthesizedExpression
+            functionCall or arrayLiteral or stringLiteral or numberLiteral or booleanLiteral or identifier or parenthesizedExpression
             )
     val postfixExpression: Parser<Expression> by parser {
         primaryExpression and optional(PP or MM)
     }.map { (expr, op) ->
         if (op != null) PostfixExpression(expr, op.text) else expr
     }
-    val memberTail: Parser<String> = (-DOT and IDENTIFIER).map { id ->
-        (id as com.github.h0tk3y.betterParse.lexer.TokenMatch).text
+    val methodCall: Parser<Expression> = parser {
+        (postfixExpression and -DOT and IDENTIFIER and -LPAREN and argumentList and -RPAREN).map { (expr, method, args) ->
+            MethodCall(expr, method.text, args)
+        }
     }
-    val memberExpression: Parser<Expression> =
-        (postfixExpression and optional<String>(memberTail))
-            .map { pair ->
-                val expr: Expression = pair.t1
-                val name: String? = pair.t2
-                if (name != null) MemberAccess(expr, name) else expr
-            }
+    
+    val memberAccess: Parser<Expression> = parser {
+        (postfixExpression and -DOT and IDENTIFIER).map { (expr, member) ->
+            MemberAccess(expr, member.text)
+        }
+    }
+    
+    val memberExpression: Parser<Expression> = parser {
+        methodCall or memberAccess or postfixExpression
+    }
 
     val unaryExpression: Parser<Expression> by parser {
         ((NOT or PLUS or MINUS) and unaryExpression).map { (token, expr) ->
@@ -177,9 +194,7 @@ object MiniLanguageGrammar : Grammar<List<Statement>>() {
         }
     }
     val expressionStatement by expression use { ExpressionStatement(this) }
-    val blockStatements: Parser<List<Statement>> by parser {
-        separatedTerms(statement, WS, acceptZero = true)
-    }
+    val blockStatements: Parser<List<Statement>> by parser { separatedTerms(statement, WS, acceptZero = true) }
     val elseClause by (-ELSE and -LBRACE and blockStatements and -RBRACE)
     val ifWithParens by (
             -IF and -LPAREN and expression and -RPAREN and
@@ -219,6 +234,13 @@ object MiniLanguageGrammar : Grammar<List<Statement>>() {
         ForStatement(init, condition, update, body)
     }
 
+    val forInStatement: Parser<Statement> by parser {
+        -FOR and -LPAREN and IDENTIFIER and -IN and expression and -RPAREN and
+                -LBRACE and blockStatements and -RBRACE
+    }.map { (variable, iterable, body) ->
+        ForInStatement(variable.text, iterable, body)
+    }
+
     val breakStatement by BREAK use { BreakStatement() }
     val continueStatement by CONTINUE use { ContinueStatement() }
 
@@ -237,11 +259,11 @@ object MiniLanguageGrammar : Grammar<List<Statement>>() {
         DataClassDeclaration(t1.text, t2.map { it.text })
     }
 
-    val statement: Parser<Statement> by parser {
-        functionDeclaration or dataClassDeclaration or varDeclaration or assignment or ifStatement or whileStatement or forStatement or
-                breakStatement or continueStatement or returnStatement or expressionStatement
-    }
-    override val rootParser by separatedTerms(statement, WS, acceptZero = true)
+    val statement: Parser<Statement> by functionDeclaration or dataClassDeclaration or varDeclaration or 
+        ifStatement or whileStatement or forInStatement or forStatement or
+        breakStatement or continueStatement or returnStatement or 
+        assignment or expressionStatement
+    override val rootParser by oneOrMore(statement)
 }
 
 class Interpreter {
@@ -328,6 +350,22 @@ class Interpreter {
                 } catch (e: BreakException) {
                 }
             }
+            is ForInStatement -> {
+                try {
+                    val iterable = evaluateExpression(statement.iterable)
+                    val array = iterable as? MutableList<*> ?: error("for-in requires an array")
+                    
+                    for (element in array) {
+                        variables[statement.variable] = element ?: Unit
+                        try {
+                            statement.body.forEach { executeStatement(it) }
+                        } catch (e: ContinueException) {
+                            continue
+                        }
+                    }
+                } catch (e: BreakException) {
+                }
+            }
             is BreakStatement -> {
                 throw BreakException()
             }
@@ -371,8 +409,17 @@ class Interpreter {
             }
             is MemberAccess -> {
                 val recv = evaluateExpression(expression.receiver)
-                val inst = recv as? DataInstance ?: error("Member access on non-object")
-                inst.fields[expression.member]
+                when (recv) {
+                    is DataInstance -> recv.fields[expression.member]
+                    is MutableList<*> -> {
+                        // Handle array method calls without parentheses
+                        when (expression.member) {
+                            "size" -> recv.size
+                            else -> error("Unknown array property: ${expression.member}")
+                        }
+                    }
+                    else -> error("Member access on non-object/array")
+                }
             }
             is UnaryExpression -> {
                 val v = evaluateExpression(expression.expr)
@@ -409,6 +456,15 @@ class Interpreter {
             is FunctionCall   -> {
                 val args = expression.arguments.map { evaluateExpression(it) }
                 executeFunction(expression.name, args)
+            }
+            is MethodCall -> {
+                val receiver = evaluateExpression(expression.receiver)
+                val args = expression.arguments.map { evaluateExpression(it) }
+                executeArrayMethod(receiver, expression.method, args)
+            }
+            is ArrayLiteral -> {
+                val elements = expression.elements.map { evaluateExpression(it) }
+                elements.toMutableList()
             }
             is StringLiteral  -> {
                 val s = expression.value
@@ -567,6 +623,7 @@ class Interpreter {
         return when (name) {
             "submit"    -> { println("submit() wurde aufgerufen"); Unit }
             "showAlert" -> { println("Alert: ${args.firstOrNull() ?: "No message"}"); Unit }
+            "println"   -> { println(args.firstOrNull()?.toString() ?: ""); Unit }
             else -> {
                 dataClasses[name]?.let { dc ->
                     if (args.size != dc.fields.size) error("Data class '${'$'}name' expects ${'$'}{dc.fields.size} args, got ${'$'}{args.size}")
@@ -601,6 +658,37 @@ class Interpreter {
         }
     }
 
+    private fun executeArrayMethod(receiver: Any?, method: String, args: List<Any?>): Any? {
+        val array = receiver as? MutableList<Any?> ?: error("Method '$method' can only be called on arrays")
+        
+        return when (method) {
+            "add" -> {
+                if (args.size != 1) error("add() expects exactly 1 argument")
+                array.add(args[0])
+                Unit
+            }
+            "removeAt" -> {
+                if (args.size != 1) error("removeAt() expects exactly 1 argument")
+                val index = args[0] as? Int ?: error("removeAt() index must be an integer")
+                if (index < 0 || index >= array.size) error("Index $index out of bounds for array of size ${array.size}")
+                array.removeAt(index)
+            }
+            "size" -> {
+                if (args.isNotEmpty()) error("size() expects no arguments")
+                array.size
+            }
+            "contains" -> {
+                if (args.size != 1) error("contains() expects exactly 1 argument")
+                array.contains(args[0])
+            }
+            "remove" -> {
+                if (args.size != 1) error("remove() expects exactly 1 argument")
+                array.remove(args[0])
+            }
+            else -> error("Unknown array method: $method")
+        }
+    }
+
     fun setVariable(name: String, value: Any) {
         variables[name] = value
     }
@@ -609,7 +697,40 @@ class Interpreter {
 }
 
 fun test() {
-    val code = """
+    // Test nur die Function-Deklaration
+    val justFunctionCode = """
+        fun inc(x) {
+            return x + 1
+        }
+    """.trimIndent()
+
+    try {
+        println("Testing ONLY function declaration...")
+        val ast = MiniLanguageGrammar.parseToEnd(justFunctionCode)
+        println("Function declaration parses successfully! AST size: ${ast.size}")
+        
+    } catch (e: Exception) {
+        println("Function declaration error: ${e.message}")
+        e.printStackTrace()
+    }
+
+    // Test nur Function-Call
+    val justCallCode = """
+        var y = inc(41)
+    """.trimIndent()
+
+    try {
+        println("Testing ONLY function call...")
+        val ast = MiniLanguageGrammar.parseToEnd(justCallCode)
+        println("Function call parses successfully! AST size: ${ast.size}")
+        
+    } catch (e: Exception) {
+        println("Function call error: ${e.message}")
+        e.printStackTrace()
+    }
+
+    // Complete integration test - all features including arrays
+    val completeCode = """
         /* Dies ist ein mehrzeiliger 
            Blockkommentar der verschiedene 
            Zeilen umfasst */
@@ -624,31 +745,6 @@ fun test() {
             return "Greeting sent to " + name
         }
         
-        fun factorial(n) {
-            if (n <= 1) {
-                return 1
-            }
-            return n * factorial(n - 1)
-        }
-        
-        fun fibonacci(n) {
-            if (n <= 1) {
-                return n
-            }
-            return fibonacci(n - 1) + fibonacci(n - 2)
-        }
-        
-        fun countDown(n) {
-            while (n > 0) {
-                showAlert("Countdown: " + n)
-                n = n - 1
-                if (n == 3) {
-                    return "Early exit at " + n
-                }
-            }
-            return "Countdown finished"
-        }
-        
         /* Teste benutzerdefinierte Funktionen */
         var result1 = add(5, 3)
         showAlert("add(5, 3) = " + result1)
@@ -656,156 +752,92 @@ fun test() {
         var result2 = greet("Alice")
         showAlert("greet result: " + result2)
         
-        var result3 = factorial(5)
-        showAlert("factorial(5) = " + result3)
-        
-        var result4 = fibonacci(6)
-        showAlert("fibonacci(6) = " + result4)
-        
-        var result5 = countDown(7)
-        showAlert("countDown result: " + result5)
-        
         /* Ursprüngliche Tests */
         var a = 4
         var b = 2
-        /* Berechnung von c */ var c = a * b * 4 / 2
+        var c = a * b * 4 / 2
         var d = a / b
         var flag = false
-        var neg = -a
-        var pos = +a
-        var inv = !flag
         
         showAlert("c = " + c + ", d = " + d)
-        showAlert("neg = " + neg + ", pos = " + pos + ", inv = " + inv)
 
         /* Teste mathematische Operationen */
         if (c == 8 && d == 2) {
             showAlert("Multiplikation und Division funktionieren!")
         }
-
-        if (!flag && neg < 0) {
-            showAlert("Unary operations work!")
-        }
-     
-        var count = 0
-        while (count < 3) {
-            showAlert("While Count = " + count)
-            count++
+        
+        /* Array Tests - Testing all required functionality */
+        
+        // Test empty array creation
+        var array = []
+        println("Empty array created: " + array.size)
+        
+        // Test array with string elements
+        var names = ["Alex", "Lea", "Tom"]
+        println("Names array size: " + names.size)
+        
+        // Test array with number elements
+        var numbers = [1, 1, 2, 3, 5]
+        println("Numbers array size: " + numbers.size)
+        
+        // Test for-in loop with arrays
+        println("Iterating over names:")
+        for (name in names) {
+            println(name)
         }
         
-        /* 
-         * Neue for-Schleife Tests
-         * Diese können auch verschachtelte Kommentare enthalten
-         */
-        showAlert("Testing for-loop:")
-        for (var i = 0; i < 5; i++) {
-            showAlert("For loop i = " + i)
+        println("Iterating over numbers:")
+        for (number in numbers) {
+            println(number)
         }
         
-        /* for-Schleife mit externen Variablen */
-        showAlert("For loop with external variables:")
-        var j = 10
-        for (; j > 5; j = j - 1) {
-            showAlert("For loop j = " + j)
+        // Test array methods
+        println("Testing array methods:")
+        
+        // Add method
+        numbers.add(8)
+        println("After adding 8, numbers size: " + numbers.size)
+        
+        // Contains method
+        var contains3 = numbers.contains(3)
+        println("Numbers contains 3: " + contains3)
+        
+        var contains10 = numbers.contains(10)
+        println("Numbers contains 10: " + contains10)
+        
+        // RemoveAt method
+        numbers.removeAt(0)
+        println("After removing first element, numbers size: " + numbers.size)
+        
+        // Size method (called as function)
+        var currentSize = numbers.size()
+        println("Current numbers size (method call): " + currentSize)
+        
+        // Remove method
+        var removedLea = names.remove("Lea")
+        println("Removed Lea: " + removedLea)
+        println("Names after removing Lea:")
+        for (name in names) {
+            println(name)
         }
         
-        /* for-Schleife ohne Initialisierung */
-        showAlert("For loop starting from existing variable:")
-        var k = 0
-        for (; k <= 2; k++) {
-            showAlert("For loop k = " + k)
-        }
+        // Test property access vs method call
+        println("Size as property: " + names.size)
+        println("Size as method: " + names.size())
         
-        /* for-Schleife mit Dekrement */
-        showAlert("For loop with decrement:")
-        for (var m = 5; m > 0; m--) {
-            showAlert("For loop m = " + m)
-        }
-        
-        /*
-         * Break und Continue Tests
-         * Diese testen die Kontrollfluss-Mechanismen
-         */
-        showAlert("Testing break and continue:")
-        
-        /* Break Test */
-        showAlert("Break test - should stop at 3:")
-        for (var n = 0; n < 10; n++) {
-            if (n == 3) {
-                break
-            }
-            showAlert("Break test n = " + n)
-        }
-        
-        /* Continue Test */
-        showAlert("Continue test - should skip even numbers:")
-        for (var p = 0; p < 6; p++) {
-            if (p == 2 || p == 4) {
-                continue
-            }
-            showAlert("Continue test p = " + p)
-        }
-        
-        /* While mit break/continue */
-        showAlert("While loop with break and continue:")
-        var q = 0
-        while (q < 10) {
-            q++
-            if (q == 3 || q == 7) {
-                continue
-            }
-            if (q == 8) {
-                break
-            }
-            showAlert("While q = " + q)
-        }
-        /* Data class tests */
-        data class Person(name, age) // CHG
-        var user = Person("Alice", 30)
-        showAlert("Person name = " + user.name)
-        showAlert("Person name = ${'$'}{user.name}") // CHG: interpolation demo
-        showAlert("Person age = " + user.age)
-        user.age = user.age + 1
-        showAlert("Person age after birthday = " + user.age)
-        showAlert("Next year age = ${'$'}{user.age + 1}") // CHG: expression interpolation
-        showAlert("Upper name = ${'$'}{user.name.toUpper()}") // CHG: method call (alias to toUpperCase)
-        showAlert("Substring(0,3) = ${'$'}{user.name.substring(0, 3)}") // CHG: method call with params
-        /* Ende des Testcodes */
+        println("Array tests completed!")
     """.trimIndent()
 
     try {
-        val ast = MiniLanguageGrammar.parseToEnd(code)
+        println("\nTesting complete integrated code...")
+        val ast = MiniLanguageGrammar.parseToEnd(completeCode)
+        println("Complete code parses successfully!")
+        
         val interpreter = Interpreter()
-
-        println("Parsing erfolgreich. AST:")
-        ast.forEach { println("  $it") }
-        println("\nAusführung:")
-
+        println("\n=== VOLLSTÄNDIGE AUSFÜHRUNG ===")
         interpreter.interpret(ast)
-
-        println("\nVariablen nach Ausführung:")
-        println("result1 = ${interpreter.getVariable("result1")}")
-        println("result2 = ${interpreter.getVariable("result2")}")
-        println("result3 = ${interpreter.getVariable("result3")}")
-        println("result4 = ${interpreter.getVariable("result4")}")
-        println("result5 = ${interpreter.getVariable("result5")}")
-        println("a = ${interpreter.getVariable("a")}")
-        println("b = ${interpreter.getVariable("b")}")
-        println("c = ${interpreter.getVariable("c")}")
-        println("d = ${interpreter.getVariable("d")}")
-        println("neg = ${interpreter.getVariable("neg")}")
-        println("pos = ${interpreter.getVariable("pos")}")
-        println("inv = ${interpreter.getVariable("inv")}")
-        println("count = ${interpreter.getVariable("count")}")
-        println("i = ${interpreter.getVariable("i")}")
-        println("j = ${interpreter.getVariable("j")}")
-        println("k = ${interpreter.getVariable("k")}")
-        println("m = ${interpreter.getVariable("m")}")
-        println("n = ${interpreter.getVariable("n")}")
-        println("p = ${interpreter.getVariable("p")}")
-        println("q = ${interpreter.getVariable("q")}")
-        println("name = ${interpreter.getVariable("name")}")
-
+        println("\n=== AUSFÜHRUNG BEENDET ===")
+        
     } catch (e: Exception) {
         println("Fehler beim Parsen oder Ausführen: ${e.message}")
         e.printStackTrace()

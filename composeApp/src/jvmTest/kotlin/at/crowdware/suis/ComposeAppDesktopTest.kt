@@ -127,8 +127,13 @@ class ComposeAppDesktopTest {
             p.age = p.age + 1
         """.trimIndent()
 
-        val result = MiniLanguageGrammar.parseToEnd(code)
-        assertEquals(3, result.size)
+        try {
+            val result = MiniLanguageGrammar.parseToEnd(code)
+            assertEquals(3, result.size)
+        } catch (e: ParseException) {
+            println("Parse error in testMemberAccessAndAssignmentParsing: ${e.message}")
+            throw e
+        }
     }
 
     @Test
@@ -241,6 +246,86 @@ class ComposeAppDesktopTest {
         assertFailsWith<ParseException> {
             MiniLanguageGrammar.parseToEnd(code)
         }
+    }
+
+    // Array Tests
+    @Test
+    fun testEmptyArrayParsing() {
+        val code = "var array = []"
+        val result = MiniLanguageGrammar.parseToEnd(code)
+        assertEquals(1, result.size)
+        assertTrue(result[0] is VarDeclaration)
+    }
+
+    @Test
+    fun testArrayLiteralParsing() {
+        val code = """
+            var names = ["Alex", "Lea", "Tom"]
+            var numbers = [1, 2, 3, 5]
+        """.trimIndent()
+        val result = MiniLanguageGrammar.parseToEnd(code)
+        assertEquals(2, result.size)
+        assertTrue(result[0] is VarDeclaration)
+        assertTrue(result[1] is VarDeclaration)
+    }
+
+    @Test
+    fun testForInLoopParsing() {
+        val code = """
+            var names = ["Alex", "Lea"]
+            for (name in names) {
+                println(name)
+            }
+        """.trimIndent()
+        val result = MiniLanguageGrammar.parseToEnd(code)
+        assertEquals(2, result.size)
+        assertTrue(result[0] is VarDeclaration)
+        // Check that the second statement is a for-in loop
+        val forInStmt = result[1]
+        assertTrue(forInStmt.javaClass.simpleName.contains("ForIn", ignoreCase = true))
+    }
+
+    @Test
+    fun testArrayMethodCallsParsing() {
+        val code = """
+            var numbers = [1, 2, 3]
+            numbers.add(4)
+            numbers.removeAt(0)
+            var size = numbers.size()
+            var contains = numbers.contains(2)
+            numbers.remove(3)
+        """.trimIndent()
+        val result = MiniLanguageGrammar.parseToEnd(code)
+        assertEquals(6, result.size)
+        // Should all parse without errors
+    }
+
+    @Test
+    fun testArrayPropertyAccess() {
+        val code = """
+            var names = ["Alex", "Lea"]
+            var size = names.size
+        """.trimIndent()
+        val result = MiniLanguageGrammar.parseToEnd(code)
+        assertEquals(2, result.size)
+        assertTrue(result[0] is VarDeclaration)
+        assertTrue(result[1] is VarDeclaration)
+    }
+
+    @Test
+    fun testComplexArrayOperations() {
+        val code = """
+            var numbers = [1, 1, 2, 3, 5]
+            for (number in numbers) {
+                println(number)
+            }
+            numbers.add(8)
+            var contains3 = numbers.contains(3)
+            numbers.removeAt(0)
+            var currentSize = numbers.size()
+        """.trimIndent()
+        val result = MiniLanguageGrammar.parseToEnd(code)
+        assertEquals(6, result.size)
     }
 
     private fun getFunctionParamNames(fn: FunctionDeclaration): List<String> {
